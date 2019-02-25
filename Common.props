@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Useful paths. -->
+  <PropertyGroup>
+    <RepoRoot>$([System.IO.Path]::GetFullPath($(MSBuildThisFileDirectory)))\</RepoRoot>
+    <BinReleaseRoot>$(RepoRoot)release\bin\</BinReleaseRoot>
+    <TestReleaseRoot>$(RepoRoot)release\test\</TestReleaseRoot>
+    <PackageRoot>$(RepoRoot)packages\</PackageRoot>
+  </PropertyGroup>
+  <PropertyGroup>
+    <!-- Each part of the assembly version must be <=65535, so we must use a shorter format. -->
+    <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`MMdd.HHmm`)).0</BinaryVersion>
+    <BinaryVersion Condition="'$(BinaryVersion)' == ''">0.$(BUILD_BUILDNUMBER).0</BinaryVersion>
+  </PropertyGroup>
+  <!-- Auto generate binding redirect -->
+  <PropertyGroup>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+</Project>

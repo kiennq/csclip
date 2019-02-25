@@ -5,46 +5,60 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using CommandLine;
 
 namespace csclip
 {
     class Program
     {
-        public static void Main(string[] args)
-        {
-            Task.Run(() =>
-            {
-                // Message pump
-                Application.Run();
-            });
+        [Verb("copy", HelpText = "Copy to clipboard through pipe using data format {\"cf\":, \"data\":}")]
+        class CopyOptions { }
 
-            var wg = new Barrier(1);
-            var program = Program.CreateInstance();
+        [Verb("paste", HelpText = "Get content from clipboard")]
+        class PasteOptions { }
 
-            if (args.Length > 0)
-            {
-                Console.WriteLine(program.ProcessRequestAsync(args).Result);
-            }
-            else
-            {
-                string s;
-                while ((s = Console.ReadLine()) != null)
-                {
-                    Console.WriteLine(program.ProcessRequestAsync(s.Split()).Result);
-                }
-            }
-
-            Application.Exit();
-        }
+        [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"command\":, \"data\":}")]
+        class ServerOptions { }
 
         static Program CreateInstance()
         {
             return new Program();
         }
 
-        async Task<string> ProcessRequestAsync(string[] args)
+        int DoCopy(CopyOptions opts)
         {
-            return await Task.FromResult<string>(string.Join("+", args));
+            return 0;
         }
+
+        int DoPaste(PasteOptions opts)
+        {
+            return 0;
+        }
+
+        int DoRunServer(ServerOptions opts)
+        {
+            return 0;
+        }
+
+        public static void Main(string[] args)
+        {
+            var program = Program.CreateInstance();
+
+            Task.Run(() =>
+            {
+                Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
+                .MapResult(
+                    (CopyOptions opts) => program.DoCopy(opts),
+                    (PasteOptions opts) => program.DoPaste(opts),
+                    (ServerOptions opts) => program.DoRunServer(opts),
+                    errs => 0);
+
+                Application.Exit();
+            });
+
+            // Message pump
+            Application.Run();
+        }
+
     }
 }

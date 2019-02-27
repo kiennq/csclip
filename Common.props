@@ -12,8 +12,4 @@
     <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`MMdd.HHmm`)).0</BinaryVersion>
     <BinaryVersion Condition="'$(BinaryVersion)' == ''">0.$(BUILD_BUILDNUMBER).0</BinaryVersion>
   </PropertyGroup>
-  <!-- Auto generate binding redirect -->
-  <PropertyGroup>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-  </PropertyGroup>
 </Project>

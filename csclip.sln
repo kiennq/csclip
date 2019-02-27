@@ -3,13 +3,15 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.27428.2043
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csclip", "csclip.csproj", "{F328A7B2-C786-4578-B631-795885896361}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution files", "Solution files", "{F848B1EB-6447-4F39-A729-33BAFB656B3A}"
 	ProjectSection(SolutionItems) = preProject
 		Common.props = Common.props
 		Common.targets = Common.targets
 	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csclip", "csclip\csclip.csproj", "{F328A7B2-C786-4578-B631-795885896361}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csclip.test", "csclip.test\csclip.test.csproj", "{FEA063DE-157B-4341-91FD-53BC7DE752DE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,6 +23,10 @@ Global
 		{F328A7B2-C786-4578-B631-795885896361}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F328A7B2-C786-4578-B631-795885896361}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F328A7B2-C786-4578-B631-795885896361}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FEA063DE-157B-4341-91FD-53BC7DE752DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FEA063DE-157B-4341-91FD-53BC7DE752DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FEA063DE-157B-4341-91FD-53BC7DE752DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FEA063DE-157B-4341-91FD-53BC7DE752DE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

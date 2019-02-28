@@ -15,7 +15,7 @@ namespace csclip
     public class Program
     {
 
-        [Verb("copy", HelpText = "Copy to clipboard through pipe using data format {\"cf\":, \"data\":}")]
+        [Verb("copy", HelpText = "Copy to clipboard through pipe using clipboard data format {\"cf\":, \"data\":}")]
         class CopyOptions { }
 
         [Verb("paste", HelpText = "Get content from clipboard")]
@@ -25,7 +25,7 @@ namespace csclip
             public string Format { get; set; }
         }
 
-        [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"command\":, \"data\":}")]
+        [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"command\":<\"copy\"|\"paste\">, \"data\":[ClipboardData]}")]
         class ServerOptions { }
 
         static string ConvertToClipboardFormat(string format)
@@ -69,35 +69,38 @@ namespace csclip
 
         async Task<int> DoCopy(CopyOptions opts)
         {
-            var package = new DataPackage();
+            var data = new List<ClipboardData>();
+
             var text = await Console.In.ReadToEndAsync();
             try
             {
                 switch (text[0])
                 {
                     case '[':
-                        {
-                            var datas = JsonConvert.DeserializeObject<ClipboardData[]>(text);
-                            foreach (var data in datas)
-                            {
-                                var norm = NormalizeClipboardData(data);
-                                package.SetData(norm.cf, norm.data);
-                            }
-
-                            break;
-                        }
+                        data = JsonConvert.DeserializeObject<List<ClipboardData>>(text);
+                        break;
                     default:
                         {
-                            var data = JsonConvert.DeserializeObject<ClipboardData>(text);
-                            var norm = NormalizeClipboardData(data);
-                            package.SetData(norm.cf, norm.data);
+                            data.Add(JsonConvert.DeserializeObject<ClipboardData>(text));
                             break;
                         }
                 }
             }
             catch (JsonException)
             {
-                package.SetText(text);
+                data.Add(new ClipboardData { cf = "text", data = text });
+            }
+
+            return DoCopyInternal(data);
+        }
+
+        int DoCopyInternal(IList<ClipboardData> data)
+        {
+            var package = new DataPackage();
+            foreach (var d in data)
+            {
+                var norm = NormalizeClipboardData(d);
+                package.SetData(norm.cf, norm.data);
             }
 
             Clipboard.SetContent(package);
@@ -115,10 +118,41 @@ namespace csclip
             }
 
             return 0;
-            }
+        }
 
-        int DoRunServer(ServerOptions opts)
+        struct ClipboardCommand
         {
+            public string command;
+            public List<ClipboardData> data;
+        }
+
+        async Task<int> DoRunServer(ServerOptions opts)
+        {
+            try
+            {
+                Int32 dataSize = 0;
+                while ((dataSize = Convert.ToInt32(await Console.In.ReadLineAsync())) > 0)
+                {
+                    var buffer = new char[dataSize];
+                    await Console.In.ReadBlockAsync(buffer, 0, dataSize);
+                    try
+                    {
+                        var request = JsonConvert.DeserializeObject<ClipboardCommand>(new string(buffer));
+                        switch (request.command)
+                        {
+                            case "copy":
+                                DoCopyInternal(request.data);
+                                break;
+                            case "paste":
+                                await DoPaste(new PasteOptions { Format = "Text" });
+                                break;
+                        }
+                    }
+                    catch (JsonException) { }
+                }
+            }
+            catch (FormatException) { }
+
             return 0;
         }
 
@@ -128,7 +162,7 @@ namespace csclip
                    .MapResult(
                         (CopyOptions opts) => DoCopy(opts).Result,
                         (PasteOptions opts) => DoPaste(opts).Result,
-                        (ServerOptions opts) => DoRunServer(opts),
+                        (ServerOptions opts) => DoRunServer(opts).Result,
                         errs => 0);
         }
 

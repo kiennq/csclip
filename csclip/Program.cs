@@ -86,16 +86,13 @@ namespace csclip
 
                             break;
                         }
-                    case '{':
+                    default:
                         {
                             var data = JsonConvert.DeserializeObject<ClipboardData>(text);
                             var norm = NormalizeClipboardData(data);
                             package.SetData(norm.cf, norm.data);
                             break;
                         }
-                    default:
-                        package.SetText(text);
-                        break;
                 }
             }
             catch (JsonException)

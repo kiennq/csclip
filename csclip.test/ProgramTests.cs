@@ -7,21 +7,37 @@ namespace csclip.test
     [TestClass]
     public class ProgramTests
     {
+        class MockConsole
+        {
+            public StreamWriter Stdin { get; }
+            public StreamReader Stdout { get; }
+
+            public MockConsole()
+            {
+                var input = new MemoryStream();
+                Console.SetIn(new StreamReader(input));
+                Stdin = new StreamWriter(input);
+
+                var output = new MemoryStream();
+                Console.SetOut(new StreamWriter(output));
+                Stdout = new StreamReader(output);
+            }
+        }
+
         [TestMethod]
         public void TestCopyAndPaste()
         {
             var program = new Program();
+            var console = new MockConsole();
 
             // Copy
             var input = "Test";
-            Console.SetIn(new StringReader(input));
+            console.Stdin.Write(input);
             program.Run(new string[] { "copy" });
 
             // Paste
-            var stdout = new StringWriter();
-            Console.SetOut(stdout);
             program.Run(new string[] { "paste" });
-            Assert.AreEqual(stdout.ToString(), input);
+            Assert.AreEqual(console.Stdout.ReadToEnd(), input);
         }
 
         [TestMethod]

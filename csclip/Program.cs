@@ -23,9 +23,11 @@ namespace csclip
         {
             [Option('f', "format", Default = "text", HelpText = "Clipboard format. Supported format: <text|html>")]
             public string Format { get; set; }
+            [Option('i', "rpc-format", Default = false, HelpText = "Format content using rpc format <size>\\r\\n{\"data\":}")]
+            public bool RPCFormat { get; set; }
         }
 
-        [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"command\":<\"copy\"|\"paste\">, \"data\":[ClipboardData]}")]
+        [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"id\":, \"command\":\"<copy|paste>\", \"data\":}")]
         class ServerOptions { }
 
         static string ConvertToClipboardFormat(string format)
@@ -100,12 +102,40 @@ namespace csclip
             foreach (var d in data)
             {
                 var norm = NormalizeClipboardData(d);
-                package.SetData(norm.cf, norm.data);
+                if (d.data != null)
+                {
+                    package.SetData(norm.cf, norm.data);
+                }
+                else
+                {
+                    package.SetDataProvider(norm.cf, new DataProviderHandler(OnDeferredDataRequestHandler));
+                }
             }
 
             Clipboard.SetContent(package);
             Clipboard.Flush();
             return 0;
+        }
+
+        async void OnDeferredDataRequestHandler(DataProviderRequest request)
+        {
+            // TODO: Empty data indicate that this data can be defer rendered
+            var deferral = request.GetDeferral();
+            try
+            {
+                m_dataNotifier = new TaskCompletionSource<ClipboardData>();
+                var appRequestJson = JsonConvert.SerializeObject(new { id = ++m_requestId, command = "get", args = request.FormatId });
+                Console.WriteLine(Encoding.UTF8.GetByteCount(appRequestJson));
+                Console.Write(appRequestJson);
+
+                // Get and put data in request
+                var norm = NormalizeClipboardData(await m_dataNotifier.Task);
+                request.SetData(norm.data);
+            }
+            finally
+            {
+                deferral.Complete();
+            }
         }
 
         async Task<int> DoPaste(PasteOptions opts)
@@ -114,7 +144,17 @@ namespace csclip
             var format = ConvertToClipboardFormat(opts.Format);
             if (data.Contains(format))
             {
-                Console.Write(await data.GetDataAsync(format));
+                var content = await data.GetDataAsync(format);
+                if (opts.RPCFormat)
+                {
+                    var output = JsonConvert.SerializeObject(new { data = content});
+                    Console.WriteLine(Encoding.UTF8.GetByteCount(output));
+                    Console.Write(output);
+                }
+                else
+                {
+                    Console.Write(content);
+                }
             }
 
             return 0;
@@ -122,6 +162,7 @@ namespace csclip
 
         struct ClipboardCommand
         {
+            public int id;
             public string command;
             public List<ClipboardData> data;
         }
@@ -141,8 +182,21 @@ namespace csclip
                         switch (request.command)
                         {
                             case "copy":
-                                DoCopyInternal(request.data);
-                                break;
+                                {
+                                    if (request.id == c_bypassRequestId)
+                                    {
+                                        DoCopyInternal(request.data);
+                                    }
+                                    else if (request.id == m_requestId)
+                                    {
+                                        // Delay rendering data request
+                                        if (request.data != null)
+                                        {
+                                            m_dataNotifier?.TrySetResult(request.data[0]);
+                                        }
+                                    }
+                                    break;
+                                }
                             case "paste":
                                 await DoPaste(new PasteOptions { Format = "Text" });
                                 break;
@@ -155,6 +209,11 @@ namespace csclip
 
             return 0;
         }
+
+        // Event to notify copy delegate about package ready
+        private TaskCompletionSource<ClipboardData> m_dataNotifier = null;
+        private int m_requestId = 0;
+        private const int c_bypassRequestId = -1;
 
         public int Run(string[] args)
         {

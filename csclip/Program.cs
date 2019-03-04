@@ -23,12 +23,16 @@ namespace csclip
         {
             [Option('f', "format", Default = "text", HelpText = "Clipboard format. Supported format: <text|html>")]
             public string Format { get; set; }
-            [Option('i', "rpc-format", Default = false, HelpText = "Format content using rpc format <size>\\r\\n{\"data\":}")]
+            [Option('i', "rpc-format", HelpText = "Format content using rpc format <size>\\r\\n{\"data\":}")]
             public bool RPCFormat { get; set; }
         }
 
         [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"id\":, \"command\":\"<copy|paste>\", \"data\":}")]
-        class ServerOptions { }
+        class ServerOptions
+        {
+            [Option('e', "encode", HelpText = "Using base64 encoding for data")]
+            public bool EncodeBase64 { get; set; }
+        }
 
         static string ConvertToClipboardFormat(string format)
         {
@@ -69,11 +73,37 @@ namespace csclip
             return norm;
         }
 
+        string ToRPCFormat(object o)
+        {
+            var jsonify = JsonConvert.SerializeObject(o);
+            if (m_useBase64Encode)
+            {
+                jsonify = Convert.ToBase64String(Encoding.UTF8.GetBytes(jsonify));
+            }
+
+            return String.Format("{0}\r\n{1}", Encoding.UTF8.GetByteCount(jsonify), jsonify);
+        }
+
+        public Program()
+        {
+            Clipboard.ContentChanged += ClipboardContentChangedHandler;
+        }
+
+        async void ClipboardContentChangedHandler(object sender, object e)
+        {
+            await DoPaste(new PasteOptions { Format = "text", RPCFormat = true });
+        }
+
         async Task<int> DoCopy(CopyOptions opts)
         {
             var data = new List<ClipboardData>();
 
             var text = await Console.In.ReadToEndAsync();
+            if (m_useBase64Encode)
+            {
+                text = Encoding.UTF8.GetString(Convert.FromBase64String(text));
+            }
+
             try
             {
                 switch (text[0])
@@ -93,10 +123,11 @@ namespace csclip
                 data.Add(new ClipboardData { cf = "text", data = text });
             }
 
-            return DoCopyInternal(data);
+            DoCopyInternal(data);
+            return 0;
         }
 
-        int DoCopyInternal(IList<ClipboardData> data)
+        void DoCopyInternal(IList<ClipboardData> data)
         {
             var package = new DataPackage();
             foreach (var d in data)
@@ -114,7 +145,6 @@ namespace csclip
 
             Clipboard.SetContent(package);
             Clipboard.Flush();
-            return 0;
         }
 
         async void OnDeferredDataRequestHandler(DataProviderRequest request)
@@ -124,9 +154,7 @@ namespace csclip
             try
             {
                 m_dataNotifier = new TaskCompletionSource<ClipboardData>();
-                var appRequestJson = JsonConvert.SerializeObject(new { id = ++m_requestId, command = "get", args = request.FormatId });
-                Console.WriteLine(Encoding.UTF8.GetByteCount(appRequestJson));
-                Console.Write(appRequestJson);
+                Console.Write(ToRPCFormat(new { id = ++m_requestId, command = "get", args = request.FormatId }));
 
                 // Get and put data in request
                 var norm = NormalizeClipboardData(await m_dataNotifier.Task);
@@ -147,9 +175,7 @@ namespace csclip
                 var content = await data.GetDataAsync(format);
                 if (opts.RPCFormat)
                 {
-                    var output = JsonConvert.SerializeObject(new { data = content});
-                    Console.WriteLine(Encoding.UTF8.GetByteCount(output));
-                    Console.Write(output);
+                    Console.Write(ToRPCFormat(new { command = "paste", args = content}));
                 }
                 else
                 {
@@ -169,6 +195,7 @@ namespace csclip
 
         async Task<int> DoRunServer(ServerOptions opts)
         {
+            m_useBase64Encode = opts.EncodeBase64;
             try
             {
                 Int32 dataSize = 0;
@@ -178,7 +205,13 @@ namespace csclip
                     await Console.In.ReadBlockAsync(buffer, 0, dataSize);
                     try
                     {
-                        var request = JsonConvert.DeserializeObject<ClipboardCommand>(new string(buffer));
+                        string data = new string(buffer);
+                        if (opts.EncodeBase64)
+                        {
+                            data = Encoding.UTF8.GetString(Convert.FromBase64String(data));
+                        }
+
+                        var request = JsonConvert.DeserializeObject<ClipboardCommand>(data);
                         switch (request.command)
                         {
                             case "copy":
@@ -213,6 +246,7 @@ namespace csclip
         // Event to notify copy delegate about package ready
         private TaskCompletionSource<ClipboardData> m_dataNotifier = null;
         private int m_requestId = 0;
+        private bool m_useBase64Encode = false;
         private const int c_bypassRequestId = -1;
 
         public int Run(string[] args)
@@ -225,6 +259,7 @@ namespace csclip
                         errs => 0);
         }
 
+        [STAThread]
         static void Main(string[] args)
         {
             var program = new Program();

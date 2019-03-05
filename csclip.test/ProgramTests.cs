@@ -43,21 +43,21 @@ namespace csclip.test
             {
                 con.Stdin.Write(input);
             });
-            program.Run(new string[] { "copy" });
+            program.RunAsync(new string[] { "copy" }).Wait();
 
             // Paste
             KeepPositionInvoke(con.Stdout.BaseStream, () =>
             {
-                program.Run(new string[] { "paste" });
+                program.RunAsync(new string[] { "paste" }).Wait();
             });
             Assert.AreEqual(con.Stdout.ReadToEnd(), input);
 
             // Paste
             KeepPositionInvoke(con.Stdout.BaseStream, () =>
             {
-                program.Run(new string[] { "paste", "--rpc-format" });
+                program.RunAsync(new string[] { "paste", "--rpc-format" }).Wait();
             });
-            Assert.AreEqual(con.Stdout.ReadToEnd(), String.Format("15\r\n{{\"data\":\"{0}\"}}", input));
+            Assert.AreEqual(con.Stdout.ReadToEnd(), String.Format("33\r\n{{\"command\":\"paste\",\"args\":\"{0}\"}}", input));
         }
 
         [TestMethod]
@@ -80,20 +80,20 @@ EndFragment:00000164
             {
                 con.Stdin.Write(String.Format("[{{\"cf\":\"text\", \"data\":\"{0}\"}}, {{\"cf\":\"html\", \"data\":\"{1}\"}}]", inputText, inputHtml));
             });
-            program.Run(new string[] { "copy" });
+            program.RunAsync(new string[] { "copy" }).Wait();
 
             // Paste
             {
                 KeepPositionInvoke(con.Stdout.BaseStream, () =>
                 {
-                    program.Run(new string[] { "paste" });
+                    program.RunAsync(new string[] { "paste" }).Wait();
                 });
                 Assert.AreEqual(con.Stdout.ReadToEnd(), inputText);
             }
             {
                 KeepPositionInvoke(con.Stdout.BaseStream, () =>
                 {
-                    program.Run(new string[] { "paste", "-f", "html" });
+                    program.RunAsync(new string[] { "paste", "-f", "html" }).Wait();
                 });
                 Assert.AreEqual(con.Stdout.ReadToEnd(), outputHtml);
             }

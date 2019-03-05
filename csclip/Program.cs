@@ -2,13 +2,13 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using CommandLine;
-using CommandLine.Text;
 using Newtonsoft.Json;
 using Windows.ApplicationModel.DataTransfer;
-using Application = System.Windows.Forms.Application;
+using System.Windows.Threading;
+using System.Threading;
+using System.Runtime.InteropServices;
 
 namespace csclip
 {
@@ -91,10 +91,12 @@ namespace csclip
 
         async void ClipboardContentChangedHandler(object sender, object e)
         {
+            // need delay to make sure data is available in clipboard
+            await Task.Delay(500);
             await DoPaste(new PasteOptions { Format = "text", RPCFormat = true });
         }
 
-        async Task<int> DoCopy(CopyOptions opts)
+        async Task DoCopy(CopyOptions opts)
         {
             var data = new List<ClipboardData>();
 
@@ -123,11 +125,10 @@ namespace csclip
                 data.Add(new ClipboardData { cf = "text", data = text });
             }
 
-            DoCopyInternal(data);
-            return 0;
+            await DoCopyInternal(data);
         }
 
-        void DoCopyInternal(IList<ClipboardData> data)
+        async Task DoCopyInternal(IList<ClipboardData> data)
         {
             var package = new DataPackage();
             foreach (var d in data)
@@ -143,8 +144,18 @@ namespace csclip
                 }
             }
 
-            Clipboard.SetContent(package);
-            Clipboard.Flush();
+            // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
+            for (int i = 0; i < 10; i++)
+            {
+                try
+                {
+                    Clipboard.SetContent(package);
+                    Clipboard.Flush();
+                    break;
+                }
+                catch (Exception) { }
+                await Task.Delay(10);
+            }
         }
 
         async void OnDeferredDataRequestHandler(DataProviderRequest request)
@@ -166,24 +177,27 @@ namespace csclip
             }
         }
 
-        async Task<int> DoPaste(PasteOptions opts)
+        async Task DoPaste(PasteOptions opts)
         {
             var data = Clipboard.GetContent();
             var format = ConvertToClipboardFormat(opts.Format);
-            if (data.Contains(format))
+
+            try
             {
-                var content = await data.GetDataAsync(format);
-                if (opts.RPCFormat)
+                if (data.Contains(format))
                 {
-                    Console.Write(ToRPCFormat(new { command = "paste", args = content}));
-                }
-                else
-                {
-                    Console.Write(content);
+                    var content = await data.GetDataAsync(format);
+                    if (opts.RPCFormat)
+                    {
+                        Console.Write(ToRPCFormat(new { command = "paste", args = content }));
+                    }
+                    else
+                    {
+                        Console.Write(content);
+                    }
                 }
             }
-
-            return 0;
+            catch (Exception) { }
         }
 
         struct ClipboardCommand
@@ -193,7 +207,7 @@ namespace csclip
             public List<ClipboardData> data;
         }
 
-        async Task<int> DoRunServer(ServerOptions opts)
+        async Task DoRunServer(ServerOptions opts)
         {
             m_useBase64Encode = opts.EncodeBase64;
             try
@@ -218,7 +232,7 @@ namespace csclip
                                 {
                                     if (request.id == c_bypassRequestId)
                                     {
-                                        DoCopyInternal(request.data);
+                                        await DoCopyInternal(request.data);
                                     }
                                     else if (request.id == m_requestId)
                                     {
@@ -239,49 +253,53 @@ namespace csclip
                 }
             }
             catch (FormatException) { }
-
-            return 0;
         }
 
         // Event to notify copy delegate about package ready
         private TaskCompletionSource<ClipboardData> m_dataNotifier = null;
         private int m_requestId = 0;
         private bool m_useBase64Encode = false;
-        private const int c_bypassRequestId = -1;
+        private const int c_bypassRequestId = 0;
 
-        public int Run(string[] args)
+        public async Task RunAsync(string[] args)
         {
-            return Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
+            await Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
                    .MapResult(
-                        (CopyOptions opts) => DoCopy(opts).Result,
-                        (PasteOptions opts) => DoPaste(opts).Result,
-                        (ServerOptions opts) => DoRunServer(opts).Result,
-                        errs => 0);
+                        (CopyOptions opts) => DoCopy(opts),
+                        (PasteOptions opts) => DoPaste(opts),
+                        (ServerOptions opts) => DoRunServer(opts),
+                        errs => Task.FromResult(0));
         }
 
         [STAThread]
         static void Main(string[] args)
         {
             var program = new Program();
+            var context = new DispatcherSynchronizationContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+
+            var dispatcher = Dispatcher.CurrentDispatcher;
 
             var inputThread = new Thread(() =>
             {
                 try
                 {
-                    program.Run(args);
+                    program.RunAsync(args).Wait();
                 }
                 catch(Exception e)
                 {
                     Console.Error.WriteLine(e.Message);
                 }
 
-                Application.Exit();
+                dispatcher.InvokeShutdown();
+                Dispatcher.ExitAllFrames();
+
             });
             inputThread.SetApartmentState(ApartmentState.STA);
             inputThread.Start();
 
             // Message pump
-            Application.Run();
+            Dispatcher.Run();
         }
 
     }

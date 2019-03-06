@@ -12,13 +12,38 @@ using System.Runtime.InteropServices;
 
 namespace csclip
 {
+    class RunInMainThread
+    {
+        public RunInMainThread(TaskScheduler taskScheduler)
+        {
+            m_taskScheduler = taskScheduler;
+        }
+        public Task<T> Invoke<T>(Func<T> func)
+        {
+            return Task.Run(() => { }).ContinueWith((_) =>
+            {
+                return func();
+            }, m_taskScheduler);
+        }
+
+        public Task Invoke(Action func)
+        {
+            return Task.Run(() => { }).ContinueWith((_) =>
+            {
+                func();
+            }, m_taskScheduler);
+        }
+
+        private TaskScheduler m_taskScheduler = null;
+    }
+
     public class Program
     {
 
-        [Verb("copy", HelpText = "Copy to clipboard through pipe using clipboard data format {\"cf\":, \"data\":}")]
+        [Verb(c_commandCopy, HelpText = "Copy to clipboard through pipe using clipboard data format {\"cf\":, \"data\":}")]
         class CopyOptions { }
 
-        [Verb("paste", HelpText = "Get content from clipboard")]
+        [Verb(c_commandPaste, HelpText = "Get content from clipboard")]
         class PasteOptions
         {
             [Option('f', "format", Default = "text", HelpText = "Clipboard format. Supported format: <text|html>")]
@@ -64,7 +89,7 @@ namespace csclip
                     break;
                 case "html":
                     norm.cf = StandardDataFormats.Html;
-                    norm.data = HtmlFormatHelper.CreateHtmlFormat(org.data);
+                    norm.data = (org.data == null) ? null : HtmlFormatHelper.CreateHtmlFormat(org.data);
                     break;
                 default:
                     return org;
@@ -86,6 +111,10 @@ namespace csclip
 
         public Program()
         {
+            var context = new DispatcherSynchronizationContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            m_mainThread = new RunInMainThread(TaskScheduler.FromCurrentSynchronizationContext());
+
             Clipboard.ContentChanged += ClipboardContentChangedHandler;
         }
 
@@ -140,22 +169,25 @@ namespace csclip
                 }
                 else
                 {
-                    package.SetDataProvider(norm.cf, new DataProviderHandler(OnDeferredDataRequestHandler));
+                    package.SetData(norm.cf, "1");
+                    package.SetDataProvider(norm.cf, OnDeferredDataRequestHandler);
                 }
             }
 
-            // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
-            for (int i = 0; i < 10; i++)
+            await m_mainThread.Invoke(async () =>
             {
-                try
+                // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
+                for (int i = 0; i < 10; i++)
                 {
-                    Clipboard.SetContent(package);
-                    Clipboard.Flush();
-                    break;
+                    try
+                    {
+                        Clipboard.SetContent(package);
+                        break;
+                    }
+                    catch (Exception) { }
+                    await Task.Delay(100);
                 }
-                catch (Exception) { }
-                await Task.Delay(10);
-            }
+            });
         }
 
         async void OnDeferredDataRequestHandler(DataProviderRequest request)
@@ -165,11 +197,14 @@ namespace csclip
             try
             {
                 m_dataNotifier = new TaskCompletionSource<ClipboardData>();
-                Console.Write(ToRPCFormat(new { id = ++m_requestId, command = "get", args = request.FormatId }));
+                Console.Write(ToRPCFormat(new { id = ++m_requestId, command = c_commandGet, args = request.FormatId }));
 
                 // Get and put data in request
                 var norm = NormalizeClipboardData(await m_dataNotifier.Task);
-                request.SetData(norm.data);
+                if (norm.cf == request.FormatId)
+                {
+                    request.SetData(norm.data);
+                }
             }
             finally
             {
@@ -179,7 +214,11 @@ namespace csclip
 
         async Task DoPaste(PasteOptions opts)
         {
-            var data = Clipboard.GetContent();
+            var data = await m_mainThread.Invoke(() =>
+            {
+                return Clipboard.GetContent();
+            });
+
             var format = ConvertToClipboardFormat(opts.Format);
 
             try
@@ -189,7 +228,7 @@ namespace csclip
                     var content = await data.GetDataAsync(format);
                     if (opts.RPCFormat)
                     {
-                        Console.Write(ToRPCFormat(new { command = "paste", args = content }));
+                        Console.Write(ToRPCFormat(new { command = c_commandPaste, args = content }));
                     }
                     else
                     {
@@ -207,6 +246,14 @@ namespace csclip
             public List<ClipboardData> data;
         }
 
+
+        // Supported command format
+        // Receive:
+        // - copy:  <size>\r\n{command: copy, data: [{cf:, data:}+]}
+        // - put:   <size>\r\n{command: put, data: [{cf:, data:}]}
+        // - paste: <size>\r\n{command: paste}
+        // Sent:
+        // - paste: <size>\r\n{command:<paste|get>, args:}
         async Task DoRunServer(ServerOptions opts)
         {
             m_useBase64Encode = opts.EncodeBase64;
@@ -228,24 +275,18 @@ namespace csclip
                         var request = JsonConvert.DeserializeObject<ClipboardCommand>(data);
                         switch (request.command)
                         {
-                            case "copy":
+                            case c_commandCopy:
+                                await DoCopyInternal(request.data);
+                                break;
+                            case c_commandPut:
+                                // Delay rendering data request
+                                if (request.data != null)
                                 {
-                                    if (request.id == c_bypassRequestId)
-                                    {
-                                        await DoCopyInternal(request.data);
-                                    }
-                                    else if (request.id == m_requestId)
-                                    {
-                                        // Delay rendering data request
-                                        if (request.data != null)
-                                        {
-                                            m_dataNotifier?.TrySetResult(request.data[0]);
-                                        }
-                                    }
-                                    break;
+                                    m_dataNotifier?.TrySetResult(request.data[0]);
                                 }
-                            case "paste":
-                                await DoPaste(new PasteOptions { Format = "Text" });
+                                break;
+                            case c_commandPaste:
+                                await DoPaste(new PasteOptions { Format = "text" });
                                 break;
                         }
                     }
@@ -261,6 +302,13 @@ namespace csclip
         private bool m_useBase64Encode = false;
         private const int c_bypassRequestId = 0;
 
+        private const string c_commandPaste = "paste";
+        private const string c_commandCopy = "copy";
+        private const string c_commandGet = "get";
+        private const string c_commandPut = "put";
+
+        private RunInMainThread m_mainThread = null;
+
         public async Task RunAsync(string[] args)
         {
             await Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
@@ -269,34 +317,35 @@ namespace csclip
                         (PasteOptions opts) => DoPaste(opts),
                         (ServerOptions opts) => DoRunServer(opts),
                         errs => Task.FromResult(0));
+
+            await m_mainThread.Invoke(() =>
+            {
+                Clipboard.Flush();
+            });
         }
 
         [STAThread]
         static void Main(string[] args)
         {
             var program = new Program();
-            var context = new DispatcherSynchronizationContext();
-            SynchronizationContext.SetSynchronizationContext(context);
-
             var dispatcher = Dispatcher.CurrentDispatcher;
-
-            var inputThread = new Thread(() =>
+            Task.Run(async () =>
             {
                 try
                 {
-                    program.RunAsync(args).Wait();
+                    await program.RunAsync(args);
                 }
-                catch(Exception e)
+                catch (Exception e)
                 {
                     Console.Error.WriteLine(e.Message);
                 }
-
-                dispatcher.InvokeShutdown();
-                Dispatcher.ExitAllFrames();
+                finally
+                {
+                    dispatcher.InvokeShutdown();
+                    Dispatcher.ExitAllFrames();
+                }
 
             });
-            inputThread.SetApartmentState(ApartmentState.STA);
-            inputThread.Start();
 
             // Message pump
             Dispatcher.Run();

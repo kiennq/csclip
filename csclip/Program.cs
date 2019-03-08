@@ -106,7 +106,7 @@ namespace csclip
                 jsonify = Convert.ToBase64String(Encoding.UTF8.GetBytes(jsonify));
             }
 
-            return String.Format("{0}\r\n{1}", Encoding.UTF8.GetByteCount(jsonify), jsonify);
+            return String.Format("{0}\r\n{1}", jsonify.Length, jsonify);
         }
 
         public Program()
@@ -327,6 +327,9 @@ namespace csclip
         [STAThread]
         static void Main(string[] args)
         {
+            Console.InputEncoding = Encoding.UTF8;
+            Console.OutputEncoding = Encoding.UTF8;
+
             var program = new Program();
             var dispatcher = Dispatcher.CurrentDispatcher;
             Task.Run(async () =>

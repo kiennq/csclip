@@ -257,11 +257,17 @@ namespace csclip
         async Task DoRunServer(ServerOptions opts)
         {
             m_useBase64Encode = opts.EncodeBase64;
-            try
+            string headerLine = null;
+            while ((headerLine = await Console.In.ReadLineAsync()) != null)
             {
-                Int32 dataSize = 0;
-                while ((dataSize = Convert.ToInt32(await Console.In.ReadLineAsync())) > 0)
+                try
                 {
+                    Int32 dataSize = Convert.ToInt32(headerLine);
+                    if (dataSize == 0)
+                    {
+                        continue;
+                    }
+
                     var buffer = new char[dataSize];
                     await Console.In.ReadBlockAsync(buffer, 0, dataSize);
                     try
@@ -292,8 +298,8 @@ namespace csclip
                     }
                     catch (JsonException) { }
                 }
+                catch (Exception) { }
             }
-            catch (FormatException) { }
         }
 
         // Event to notify copy delegate about package ready

@@ -257,6 +257,7 @@ namespace csclip
         async Task DoRunServer(ServerOptions opts)
         {
             m_useBase64Encode = opts.EncodeBase64;
+
             string headerLine = null;
             while ((headerLine = await Console.In.ReadLineAsync()) != null)
             {
@@ -292,7 +293,7 @@ namespace csclip
                                 }
                                 break;
                             case c_commandPaste:
-                                await DoPaste(new PasteOptions { Format = "text" });
+                                await DoPaste(new PasteOptions { Format = "text", RPCFormat = true });
                                 break;
                         }
                     }

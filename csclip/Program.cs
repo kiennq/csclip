@@ -1,24 +1,25 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using CommandLine;
-using Newtonsoft.Json;
-using Windows.ApplicationModel.DataTransfer;
-using System.Windows.Threading;
-using System.Threading;
-using System.Runtime.InteropServices;
-
-namespace csclip
+﻿namespace csclip
 {
+    using CommandLine;
+    using Microsoft.VisualStudio.Threading;
+    using Newtonsoft.Json;
+    using StreamJsonRpc;
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using System.Windows.Threading;
+    using Windows.ApplicationModel.DataTransfer;
+
     class RunInMainThread
     {
         public RunInMainThread(TaskScheduler taskScheduler)
         {
             m_taskScheduler = taskScheduler;
         }
-        public Task<T> Invoke<T>(Func<T> func)
+        public Task<T> InvokeAsync<T>(Func<T> func)
         {
             return Task.Run(() => { }).ContinueWith((_) =>
             {
@@ -26,7 +27,7 @@ namespace csclip
             }, m_taskScheduler);
         }
 
-        public Task Invoke(Action func)
+        public Task InvokeAsync(Action func)
         {
             return Task.Run(() => { }).ContinueWith((_) =>
             {
@@ -40,28 +41,31 @@ namespace csclip
     public class Program
     {
 
-        [Verb(c_commandCopy, HelpText = "Copy to clipboard through pipe using clipboard data format {\"cf\":, \"data\":}")]
+        [Verb("copy", HelpText = "Copy to clipboard through pipe using clipboard data format {\"cf\":, \"data\":}")]
         class CopyOptions { }
 
-        [Verb(c_commandPaste, HelpText = "Get content from clipboard")]
+        [Verb("paste", HelpText = "Get content from clipboard")]
         class PasteOptions
         {
-            [Option('f', "format", Default = "text", HelpText = "Clipboard format. Supported format: <text|html>")]
+            [Option('f', "format", Default = "text", HelpText = "Clipboard format. Supported format: <text|html>.")]
             public string Format { get; set; }
-            [Option('i', "rpc-format", HelpText = "Format content using rpc format <size>\\r\\n{\"data\":}")]
-            public bool RPCFormat { get; set; }
         }
 
-        [Verb("server", HelpText = "Interactively get/put data to clipboard. Data format <size>\\r\\n{\"id\":, \"command\":\"<copy|paste>\", \"data\":}")]
+        // Supported jsonrpc method:
+        // Sent:
+        // - :paste: <text data> -> nil
+        // - :get: <data format> -> <requested data>
+        // Received:
+        // - :copy:  [{cf:, data:}+] -> nil
+        // - :get: <data format> -> <requested data>
+        [Verb("server", HelpText = "Interactively get/put data to clipboard. Using jsonrpc")]
         class ServerOptions
         {
-            [Option('e', "encode", HelpText = "Using base64 encoding for data")]
-            public bool EncodeBase64 { get; set; }
         }
 
-        static string ConvertToClipboardFormat(string format)
+        static string CfToStandardFormat(string format)
         {
-            switch(format)
+            switch (format)
             {
                 case "text":
                     return StandardDataFormats.Text;
@@ -69,6 +73,22 @@ namespace csclip
                     return StandardDataFormats.Html;
                 default:
                     return format;
+            }
+        }
+
+        static string StandardToCfFormat(string format)
+        {
+            if (format == StandardDataFormats.Text)
+            {
+                return "text";
+            }
+            else if (format == StandardDataFormats.Html)
+            {
+                return "html";
+            }
+            else
+            {
+                return format;
             }
         }
 
@@ -81,7 +101,7 @@ namespace csclip
         static ClipboardData NormalizeClipboardData(ClipboardData org)
         {
             var norm = new ClipboardData();
-            switch(org.cf)
+            switch (org.cf)
             {
                 case "text":
                     norm.cf = StandardDataFormats.Text;
@@ -101,11 +121,6 @@ namespace csclip
         string ToRPCFormat(object o)
         {
             var jsonify = JsonConvert.SerializeObject(o);
-            if (m_useBase64Encode)
-            {
-                jsonify = Convert.ToBase64String(Encoding.UTF8.GetBytes(jsonify));
-            }
-
             return String.Format("{0}\r\n{1}", jsonify.Length, jsonify);
         }
 
@@ -115,26 +130,84 @@ namespace csclip
             SynchronizationContext.SetSynchronizationContext(context);
             m_mainThread = new RunInMainThread(TaskScheduler.FromCurrentSynchronizationContext());
 
+            m_sender = Console.OpenStandardOutput();
+            m_recver = Console.OpenStandardInput();
+
             Clipboard.ContentChanged += ClipboardContentChangedHandler;
         }
 
         async void ClipboardContentChangedHandler(object sender, object e)
         {
-            // need delay to make sure data is available in clipboard
-            await Task.Delay(500);
-            await DoPaste(new PasteOptions { Format = "text", RPCFormat = true });
+            try
+            {
+                // need delay to make sure data is available in clipboard
+                await Task.Delay(500);
+                await (m_requester?.PasteDataAsync(await GetDataAsync("text"))
+                    ?? Task.CompletedTask);
+            }
+            catch (Exception) { }
         }
 
-        async Task DoCopy(CopyOptions opts)
+        async void OnDeferredDataRequestHandler(DataProviderRequest request)
+        {
+            var deferral = request.GetDeferral();
+            try
+            {
+                var clipboardFormat = StandardToCfFormat(request.FormatId);
+                var data = await (m_requester?.GetDataAsync(clipboardFormat)
+                    ?? Task.FromResult<string>(null));
+
+                // Get and put data in request
+                var norm = NormalizeClipboardData(new ClipboardData { cf = clipboardFormat, data = data });
+                if (norm.cf == request.FormatId)
+                {
+                    request.SetData(norm.data);
+                }
+            }
+            catch (Exception) { }
+            finally
+            {
+                deferral.Complete();
+            }
+        }
+
+        async Task CopyAsync(IList<ClipboardData> data)
+        {
+            var package = new DataPackage();
+            foreach (var d in data)
+            {
+                var norm = NormalizeClipboardData(d);
+                if (d.data != null)
+                {
+                    package.SetData(norm.cf, norm.data);
+                }
+                else
+                {
+                    package.SetDataProvider(norm.cf, OnDeferredDataRequestHandler);
+                }
+            }
+
+            await m_mainThread.InvokeAsync(async () =>
+            {
+                // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
+                for (int i = 0; i < 10; i++)
+                {
+                    try
+                    {
+                        Clipboard.SetContent(package);
+                        break;
+                    }
+                    catch (Exception) { }
+                    await Task.Delay(100);
+                }
+            });
+        }
+
+        async Task ExecuteCopyAsync(CopyOptions opts)
         {
             var data = new List<ClipboardData>();
 
             var text = await Console.In.ReadToEndAsync();
-            if (m_useBase64Encode)
-            {
-                text = Encoding.UTF8.GetString(Convert.FromBase64String(text));
-            }
-
             try
             {
                 switch (text[0])
@@ -154,178 +227,115 @@ namespace csclip
                 data.Add(new ClipboardData { cf = "text", data = text });
             }
 
-            await DoCopyInternal(data);
+            await CopyAsync(data);
         }
 
-        async Task DoCopyInternal(IList<ClipboardData> data)
+        async Task<string> GetDataAsync(string format)
         {
-            var package = new DataPackage();
-            foreach (var d in data)
-            {
-                var norm = NormalizeClipboardData(d);
-                if (d.data != null)
-                {
-                    package.SetData(norm.cf, norm.data);
-                }
-                else
-                {
-                    package.SetData(norm.cf, "1");
-                    package.SetDataProvider(norm.cf, OnDeferredDataRequestHandler);
-                }
-            }
-
-            await m_mainThread.Invoke(async () =>
-            {
-                // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
-                for (int i = 0; i < 10; i++)
-                {
-                    try
-                    {
-                        Clipboard.SetContent(package);
-                        break;
-                    }
-                    catch (Exception) { }
-                    await Task.Delay(100);
-                }
-            });
-        }
-
-        async void OnDeferredDataRequestHandler(DataProviderRequest request)
-        {
-            // TODO: Empty data indicate that this data can be defer rendered
-            var deferral = request.GetDeferral();
-            try
-            {
-                m_dataNotifier = new TaskCompletionSource<ClipboardData>();
-                Console.Write(ToRPCFormat(new { id = ++m_requestId, command = c_commandGet, args = request.FormatId }));
-
-                // Get and put data in request
-                var norm = NormalizeClipboardData(await m_dataNotifier.Task);
-                if (norm.cf == request.FormatId)
-                {
-                    request.SetData(norm.data);
-                }
-            }
-            finally
-            {
-                deferral.Complete();
-            }
-        }
-
-        async Task DoPaste(PasteOptions opts)
-        {
-            var data = await m_mainThread.Invoke(() =>
+            var data = await m_mainThread.InvokeAsync(() =>
             {
                 return Clipboard.GetContent();
             });
 
-            var format = ConvertToClipboardFormat(opts.Format);
+            var standardFormat = CfToStandardFormat(format);
 
             try
             {
                 if (data.Contains(format))
                 {
-                    var content = await data.GetDataAsync(format);
-                    if (opts.RPCFormat)
-                    {
-                        Console.Write(ToRPCFormat(new { command = c_commandPaste, args = content }));
-                    }
-                    else
-                    {
-                        Console.Write(content);
-                    }
+                    return (string)await data.GetDataAsync(format); ;
                 }
             }
             catch (Exception) { }
+
+            return "";
         }
 
-        struct ClipboardCommand
+        async Task ExecutePasteAsync(PasteOptions opts)
         {
-            public int id;
-            public string command;
-            public List<ClipboardData> data;
+            var data = await GetDataAsync(opts.Format);
+            Console.Write(data);
         }
 
-
-        // Supported command format
-        // Receive:
-        // - copy:  <size>\r\n{command: copy, data: [{cf:, data:}+]}
-        // - put:   <size>\r\n{command: put, data: [{cf:, data:}]}
-        // - paste: <size>\r\n{command: paste}
-        // Sent:
-        // - paste: <size>\r\n{command:<paste|get>, args:}
-        async Task DoRunServer(ServerOptions opts)
+        public interface IRequest
         {
-            m_useBase64Encode = opts.EncodeBase64;
+            // Sent:
+            // - paste: <text data> -> nil
+            // - get: <data format> -> <requested data>
+            [JsonRpcMethod("paste")]
+            Task PasteDataAsync(string text);
 
-            string headerLine = null;
-            while ((headerLine = await Console.In.ReadLineAsync()) != null)
+            [JsonRpcMethod("get")]
+            Task<string> GetDataAsync(string format);
+        }
+
+        class Responser
+        {
+            private Program m_owner = null;
+            public Responser(Program prog)
             {
-                try
-                {
-                    Int32 dataSize = Convert.ToInt32(headerLine);
-                    if (dataSize == 0)
-                    {
-                        continue;
-                    }
+                m_owner = prog;
+            }
 
-                    var buffer = new char[dataSize];
-                    await Console.In.ReadBlockAsync(buffer, 0, dataSize);
-                    try
-                    {
-                        string data = new string(buffer);
-                        if (opts.EncodeBase64)
-                        {
-                            data = Encoding.UTF8.GetString(Convert.FromBase64String(data));
-                        }
+            // Received:
+            // - :copy:  [{cf:, data:}+] -> nil
+            // - :get: <data format> -> <requested data>
+            [JsonRpcMethod("copy")]
+            public async Task HandleCopyDataAsync(IList<ClipboardData> data)
+            {
+                await m_owner.CopyAsync(data);
+            }
 
-                        var request = JsonConvert.DeserializeObject<ClipboardCommand>(data);
-                        switch (request.command)
-                        {
-                            case c_commandCopy:
-                                await DoCopyInternal(request.data);
-                                break;
-                            case c_commandPut:
-                                // Delay rendering data request
-                                if (request.data != null)
-                                {
-                                    m_dataNotifier?.TrySetResult(request.data[0]);
-                                }
-                                break;
-                            case c_commandPaste:
-                                await DoPaste(new PasteOptions { Format = "text", RPCFormat = true });
-                                break;
-                        }
-                    }
-                    catch (JsonException) { }
-                }
-                catch (Exception) { }
+            [JsonRpcMethod("get")]
+            public async Task<string> HandleGetDataAsync(string format)
+            {
+                return await m_owner.GetDataAsync(format);
             }
         }
 
-        // Event to notify copy delegate about package ready
-        private TaskCompletionSource<ClipboardData> m_dataNotifier = null;
-        private int m_requestId = 0;
-        private bool m_useBase64Encode = false;
-        private const int c_bypassRequestId = 0;
+        async Task ExecuteServerAsync(ServerOptions _)
+        {
+            try
+            {
+                var shouldRetry = true;
+                while (shouldRetry)
+                {
+                    var rpc = new JsonRpc(m_sender, m_recver);
+                    m_requester = rpc.Attach<IRequest>();
 
-        private const string c_commandPaste = "paste";
-        private const string c_commandCopy = "copy";
-        private const string c_commandGet = "get";
-        private const string c_commandPut = "put";
+                    rpc.AddLocalRpcTarget(new Responser(this));
 
-        private RunInMainThread m_mainThread = null;
+                    // Arrange for the thread to just sit and wait for messages while the JSON-RPC connection lasts.
+                    rpc.Disconnected += (s, e) => shouldRetry = (e.Reason != DisconnectedReason.RemotePartyTerminated);
+
+                    // Initiate JSON-RPC message processing.
+                    rpc.StartListening();
+
+                    await rpc.Completion;
+                }
+            }
+            catch (Exception) { }
+            finally
+            {
+                ((IDisposable)m_requester).Dispose();
+            }
+        }
+
+        private readonly RunInMainThread m_mainThread = null;
+        private IRequest m_requester = null;
+        private readonly Stream m_sender = null;
+        private readonly Stream m_recver = null;
 
         public async Task RunAsync(string[] args)
         {
             await Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
                    .MapResult(
-                        (CopyOptions opts) => DoCopy(opts),
-                        (PasteOptions opts) => DoPaste(opts),
-                        (ServerOptions opts) => DoRunServer(opts),
+                        (CopyOptions opts) => ExecuteCopyAsync(opts),
+                        (PasteOptions opts) => ExecutePasteAsync(opts),
+                        (ServerOptions opts) => ExecuteServerAsync(opts),
                         errs => Task.FromResult(0));
 
-            await m_mainThread.Invoke(() =>
+            await m_mainThread.InvokeAsync(() =>
             {
                 Clipboard.Flush();
             });
@@ -334,31 +344,29 @@ namespace csclip
         [STAThread]
         static void Main(string[] args)
         {
-            Console.InputEncoding = Encoding.UTF8;
-            Console.OutputEncoding = Encoding.UTF8;
-
             var program = new Program();
             var dispatcher = Dispatcher.CurrentDispatcher;
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await program.RunAsync(args);
-                }
-                catch (Exception e)
-                {
-                    Console.Error.WriteLine(e.Message);
-                }
-                finally
-                {
-                    dispatcher.InvokeShutdown();
-                    Dispatcher.ExitAllFrames();
-                }
+            _ = Task.Run(async () =>
+              {
+                  try
+                  {
+                      await program.RunAsync(args);
+                  }
+                  catch (Exception e)
+                  {
+                      await Console.Error.WriteLineAsync(e.Message);
+                  }
+                  finally
+                  {
+                      dispatcher.InvokeShutdown();
+                      Dispatcher.ExitAllFrames();
+                  }
 
-            });
+              });
 
             // Message pump
             Dispatcher.Run();
+           
         }
 
     }

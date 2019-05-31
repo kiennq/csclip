@@ -36,42 +36,40 @@ To know more about clipboard refer to [this article](https://docs.microsoft.com/
 ### Running as server process
 In this mode, `csclip` will communicate with client process (normally text editor) via stdio.
 Client process should watch `csclip` stdout for notification.
+Both side will communicating via [`JsonRPC`](https://www.jsonrpc.org/)
 
 ``` shell
 csclip server
-```
-
-Optionally, json data can be encoded in [base64](https://en.wikipedia.org/wiki/Base64)
-
-``` shell
-csclip server -e
 ```
 
 #### Monitoring clipboard change
 When running as server, `csclip` will monitoring clipboard change and notify client about newly copied text.
 With that, newly copied text will always be available in client, and can be paste without querying the clipboard again.
 
-Notification format:
+Notification `paste`:
 
 ``` json
-<message len>\r\n
-{"command":"paste", "args":"<copied string>"}
+{"method":"paste", "params":["<copied string>"]}
 ```
 
 ### Proactively getting text from clipboard
-Client can proactively getting text from clipboard by sending this notification
+Client can proactively getting text from clipboard by sending `get` request.
 
 ``` json
-<message len>\r\n
-{"command":"paste"}
+{"method":"get", "params":["<data format>"]}
+```
+
+`csclip` will response with 
+
+``` json
+{"result":"<requested data>"}
 ```
 
 ### Copy data to clipboard
-Client can sent the following notification to `csclip` and get data to be copied to clipboard.
+Client can sent `copy` notification to `csclip` to notify the data should be copied to clipboard.
 
 ``` json
-<message len>\r\n
-{"command":"copy", "data":[{"cf":,"data":},{}]}
+{"method":"copy", "params":[[{"cf": "<data format>", "data": "<data to put into clipboard>"},{}]]}
 ```
 
 ### Delay copying to clipboard
@@ -80,22 +78,19 @@ This happens a lot when user copy some texts that can be hightlight using html (
 In that case, client can put those data formats to clipboard latter by leave the `data` field for those formats to `null`
 
 ``` json
-<message len>\r\n
-{"command":"copy", "data":[{"cf":,"data":},{}]}
+{"method":"copy", "params":[[{"cf": "<data format>", "data":null},{}]]}
 ```
 
-When other application request those data formats, `csclip` will notify client
+When other application request those data formats, `csclip` will send `get` request to client.
 
 ``` json
-<message len>\r\n
-{"command":"get", "args":"<format id string>"}
+{"method":"get", "params":["<data format>"]}
 ```
 
-Upon receving that, client should render the required format and notify back to `csclip`
+Upon receving that, client should render the required format and response back the result to `csclip`
 
 ``` json
-<message len>\r\n
-{"command":"put", "data":[{"cf":"<format id string>","data":}]}
+{"result":"<requested data>"}
 ```
 
 Please refer to [multiclip-mode](https://github.com/kiennq/highlight2clipboard) for example of client implementation.

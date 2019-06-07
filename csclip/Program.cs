@@ -59,9 +59,7 @@
         // - :copy:  [{cf:, data:}+] -> nil
         // - :get: <data format> -> <requested data>
         [Verb("server", HelpText = "Interactively get/put data to clipboard. Using jsonrpc")]
-        class ServerOptions
-        {
-        }
+        class ServerOptions { }
 
         static string CfToStandardFormat(string format)
         {
@@ -116,12 +114,6 @@
             }
 
             return norm;
-        }
-
-        string ToRPCFormat(object o)
-        {
-            var jsonify = JsonConvert.SerializeObject(o);
-            return String.Format("{0}\r\n{1}", jsonify.Length, jsonify);
         }
 
         public Program()
@@ -203,7 +195,7 @@
             });
         }
 
-        async Task ExecuteCopyAsync(CopyOptions opts)
+        async Task ExecuteCopyAsync()
         {
             var data = new List<ClipboardData>();
 
@@ -293,7 +285,7 @@
             }
         }
 
-        async Task ExecuteServerAsync(ServerOptions _)
+        async Task ExecuteServerAsync()
         {
             try
             {
@@ -330,9 +322,9 @@
         {
             await Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
                    .MapResult(
-                        (CopyOptions opts) => ExecuteCopyAsync(opts),
+                        (CopyOptions _) => ExecuteCopyAsync(),
                         (PasteOptions opts) => ExecutePasteAsync(opts),
-                        (ServerOptions opts) => ExecuteServerAsync(opts),
+                        (ServerOptions _) => ExecuteServerAsync(),
                         errs => Task.FromResult(0));
 
             await m_mainThread.InvokeAsync(() =>

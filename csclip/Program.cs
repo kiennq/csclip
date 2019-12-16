@@ -305,38 +305,44 @@
 
             while (true)
             {
-                var conn = await m_listener.AcceptTcpClientAsync();
-                _ = Task.Run(async () =>
+                try
                 {
-                    int id = Interlocked.Increment(ref s_counter);
-                    try
+                    var conn = await m_listener.AcceptTcpClientAsync();
+                    _ = Task.Run(async () =>
                     {
-                        var rpc = new JsonRpc(conn.GetStream());
-                        m_requesters[id] = rpc.Attach<IRequest>();
-
-                        rpc.AddLocalRpcTarget(new Responser(id, this));
-
-                        // Initiate JSON-RPC message processing.
-                        rpc.StartListening();
-
-                        await rpc.Completion;
-                    }
-                    catch (Exception) { }
-                    finally
-                    {
-                        m_requesters.TryRemove(id, out IRequest requester);
-
-                        if (m_requesters.IsEmpty)
+                        int id = Interlocked.Increment(ref s_counter);
+                        try
                         {
-                            await m_mainThread.InvokeAsync(() =>
-                            {
-                                Dispatcher.CurrentDispatcher.InvokeShutdown();
-                            });
-                        }
+                            var rpc = new JsonRpc(conn.GetStream());
+                            m_requesters[id] = rpc.Attach<IRequest>();
 
-                        ((IDisposable)requester)?.Dispose();
-                    }
-                });
+                            rpc.AddLocalRpcTarget(new Responser(id, this));
+
+                                // Initiate JSON-RPC message processing.
+                                rpc.StartListening();
+
+                            await rpc.Completion;
+                        }
+                        catch (Exception) { }
+                        finally
+                        {
+                            m_requesters.TryRemove(id, out IRequest requester);
+                            conn.Close();
+
+                            if (m_requesters.IsEmpty)
+                            {
+                                m_listener.Stop();
+                            }
+
+                            ((IDisposable)requester)?.Dispose();
+                        }
+                    });
+                }
+                catch (ObjectDisposedException)
+                {
+                    // This happens when Stop is called and we're waiting for connection.
+                    break;
+                }
             }
         }
 

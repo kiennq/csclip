@@ -5,9 +5,11 @@
     using Newtonsoft.Json;
     using StreamJsonRpc;
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
-    using System.Diagnostics;
     using System.IO;
+    using System.Net;
+    using System.Net.Sockets;
     using System.Threading;
     using System.Threading.Tasks;
     using System.Windows.Threading;
@@ -59,7 +61,13 @@
         // - :copy:  [{cf:, data:}+] -> nil
         // - :get: <data format> -> <requested data>
         [Verb("server", HelpText = "Interactively get/put data to clipboard. Using jsonrpc")]
-        class ServerOptions { }
+        class ServerOptions
+        {
+            [Option('h', "host", Default = "0.0.0.0", HelpText = "Tcp host.")]
+            public string Host { get; set; }
+            [Option('p', "port", Default = 9123, HelpText = "Tcp port.")]
+            public int Port { get; set; }
+        }
 
         static string CfToStandardFormat(string format)
         {
@@ -122,9 +130,6 @@
             SynchronizationContext.SetSynchronizationContext(context);
             m_mainThread = new RunInMainThread(TaskScheduler.FromCurrentSynchronizationContext());
 
-            m_sender = Console.OpenStandardOutput();
-            m_recver = Console.OpenStandardInput();
-
             Clipboard.ContentChanged += ClipboardContentChangedHandler;
         }
 
@@ -134,10 +139,13 @@
             {
                 // need delay to make sure data is available in clipboard
                 await Task.Delay(500);
-                await (m_requester?.PasteDataAsync(await GetDataAsync("text"))
-                    ?? Task.CompletedTask);
+                var data = await GetDataAsync("text");
+                foreach (var requester in m_requesters)
+                {
+                    await (requester.Value?.PasteDataAsync(data) ?? Task.CompletedTask);
+                }
             }
-            catch (Exception) { }
+            catch (Exception ex) { }
         }
 
         async void OnDeferredDataRequestHandler(DataProviderRequest request)
@@ -146,7 +154,7 @@
             try
             {
                 var clipboardFormat = StandardToCfFormat(request.FormatId);
-                var data = await (m_requester?.GetDataAsync(clipboardFormat)
+                var data = await (m_requesters?[m_lastCopyId]?.GetDataAsync(clipboardFormat)
                     ?? Task.FromResult<string>(null));
 
                 // Get and put data in request
@@ -163,7 +171,7 @@
             }
         }
 
-        async Task CopyAsync(IList<ClipboardData> data)
+        async Task CopyAsync(int id, IList<ClipboardData> data)
         {
             var package = new DataPackage();
             foreach (var d in data)
@@ -192,6 +200,8 @@
                     catch (Exception) { }
                     await Task.Delay(100);
                 }
+
+                m_lastCopyId = id;
             });
         }
 
@@ -219,7 +229,7 @@
                 data.Add(new ClipboardData { cf = "text", data = text });
             }
 
-            await CopyAsync(data);
+            await CopyAsync(-1, data);
         }
 
         async Task<string> GetDataAsync(string format)
@@ -264,8 +274,10 @@
         class Responser
         {
             private Program m_owner = null;
-            public Responser(Program prog)
+            private int m_id = 0;
+            public Responser(int id, Program prog)
             {
+                m_id = id;
                 m_owner = prog;
             }
 
@@ -275,7 +287,7 @@
             [JsonRpcMethod("copy")]
             public async Task HandleCopyDataAsync(IList<ClipboardData> data)
             {
-                await m_owner.CopyAsync(data);
+                await m_owner.CopyAsync(m_id, data);
             }
 
             [JsonRpcMethod("get")]
@@ -285,38 +297,55 @@
             }
         }
 
-        async Task ExecuteServerAsync()
+        async Task ExecuteServerAsync(ServerOptions opts)
         {
-            try
+            m_requesters = new ConcurrentDictionary<int, IRequest>();
+            m_listener = new TcpListener(IPAddress.Parse(opts.Host), opts.Port);
+            m_listener.Start();
+
+            while (true)
             {
-                var shouldRetry = true;
-                while (shouldRetry)
+                var conn = await m_listener.AcceptTcpClientAsync();
+                _ = Task.Run(async () =>
                 {
-                    var rpc = new JsonRpc(m_sender, m_recver);
-                    m_requester = rpc.Attach<IRequest>();
+                    int id = Interlocked.Increment(ref s_counter);
+                    try
+                    {
+                        var rpc = new JsonRpc(conn.GetStream());
+                        m_requesters[id] = rpc.Attach<IRequest>();
 
-                    rpc.AddLocalRpcTarget(new Responser(this));
+                        rpc.AddLocalRpcTarget(new Responser(id, this));
 
-                    // Arrange for the thread to just sit and wait for messages while the JSON-RPC connection lasts.
-                    rpc.Disconnected += (s, e) => shouldRetry = (e.Reason != DisconnectedReason.RemotePartyTerminated);
+                        // Initiate JSON-RPC message processing.
+                        rpc.StartListening();
 
-                    // Initiate JSON-RPC message processing.
-                    rpc.StartListening();
+                        await rpc.Completion;
+                    }
+                    catch (Exception) { }
+                    finally
+                    {
+                        m_requesters.TryRemove(id, out IRequest requester);
 
-                    await rpc.Completion;
-                }
-            }
-            catch (Exception) { }
-            finally
-            {
-                ((IDisposable)m_requester).Dispose();
+                        if (m_requesters.IsEmpty)
+                        {
+                            await m_mainThread.InvokeAsync(() =>
+                            {
+                                Dispatcher.CurrentDispatcher.InvokeShutdown();
+                            });
+                        }
+
+                        ((IDisposable)requester)?.Dispose();
+                    }
+                });
             }
         }
 
         private readonly RunInMainThread m_mainThread = null;
-        private IRequest m_requester = null;
-        private readonly Stream m_sender = null;
-        private readonly Stream m_recver = null;
+        private TcpListener m_listener = null;
+        private ConcurrentDictionary<int, IRequest> m_requesters;
+        private int m_lastCopyId = -1;
+
+        private static int s_counter = -1;
 
         public async Task RunAsync(string[] args)
         {
@@ -324,7 +353,7 @@
                    .MapResult(
                         (CopyOptions _) => ExecuteCopyAsync(),
                         (PasteOptions opts) => ExecutePasteAsync(opts),
-                        (ServerOptions _) => ExecuteServerAsync(),
+                        (ServerOptions opts) => ExecuteServerAsync(opts),
                         errs => Task.FromResult(0));
 
             await m_mainThread.InvokeAsync(() =>

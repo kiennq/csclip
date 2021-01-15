@@ -145,7 +145,7 @@
                     await (requester.Value?.PasteDataAsync(data) ?? Task.CompletedTask);
                 }
             }
-            catch (Exception ex) { }
+            catch (Exception) { }
         }
 
         async void OnDeferredDataRequestHandler(DataProviderRequest request)

@@ -43,8 +43,8 @@ csclip server
 ```
 
 #### Monitoring clipboard change
-When running as server, `csclip` will monitoring clipboard change and notify client about newly copied text.
-With that, newly copied text will always be available in client, and can be paste without querying the clipboard again.
+When running as a server, `csclip` will monitor clipboard changes and notify the client about newly copied text.
+This way, newly copied text will always be available on the client, and can be pasted without querying the clipboard again.
 
 Notification `paste`:
 
@@ -59,35 +59,35 @@ Client can proactively getting text from clipboard by sending `get` request.
 {"method":"get", "params":["<data format>"]}
 ```
 
-`csclip` will response with 
+`csclip` will response with
 
 ``` json
 {"result":"<requested data>"}
 ```
 
 ### Copy data to clipboard
-Client can sent `copy` notification to `csclip` to notify the data should be copied to clipboard.
+Client can sent `copy` notification to `csclip` to notify which data should be copied to clipboard.
 
 ``` json
 {"method":"copy", "params":[[{"cf": "<data format>", "data": "<data to put into clipboard>"},{}]]}
 ```
 
 ### Delay copying to clipboard
-Sometimes, it's not practically (and performant-wise) to put all of clipboard format data to clipboard directly when copying.
-This happens a lot when user copy some texts that can be hightlight using html (image) format (which will require client to convert the text to that format).
-In that case, client can put those data formats to clipboard latter by leave the `data` field for those formats to `null`
+Sometimes, it's not practical (or efficient) to put all the clipboard format data to the clipboard directly when copying.
+This happens a lot when the user copies some texts that can be highlighted using html (image) format (which will require the client to convert the text to that format).
+In that case, the client can put those data formats to the clipboard later by leaving the `data` field for those formats as `null`.
 
 ``` json
 {"method":"copy", "params":[[{"cf": "<data format>", "data":null},{}]]}
 ```
 
-When other application request those data formats, `csclip` will send `get` request to client.
+When other application requests those data formats, `csclip` will send `get` request to client.
 
 ``` json
 {"method":"get", "params":["<data format>"]}
 ```
 
-Upon receving that, client should render the required format and response back the result to `csclip`
+Upon receving that, client should render the required format and responses back the result to `csclip`
 
 ``` json
 {"result":"<requested data>"}

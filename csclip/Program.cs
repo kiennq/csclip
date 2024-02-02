@@ -12,6 +12,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.Storage.Streams;
 
 namespace csclip
 {
@@ -53,19 +55,12 @@ namespace csclip
             public string Format { get; set; }
         }
 
-        // Supported jsonrpc method:
-        // Sent:
-        // - :paste: <text data> -> nil
-        // - :get: <data format> -> <requested data>
-        // Received:
-        // - :copy:  [{cf:, data:}+] -> nil
-        // - :get: <data format> -> <requested data>
         [Verb("server", HelpText = "Interactively get/put data to clipboard. Using jsonrpc")]
         class ServerOptions
         {
-            [Option('h', "host", Default = "0.0.0.0", HelpText = "Tcp host.")]
+            [Option('h', "host", Default = "0.0.0.0", HelpText = "Tcp host")]
             public string Host { get; set; }
-            [Option('p', "port", Default = 9123, HelpText = "Tcp port.")]
+            [Option('p', "port", Default = 9123, HelpText = "Tcp port")]
             public int Port { get; set; }
         }
 
@@ -77,6 +72,8 @@ namespace csclip
                     return StandardDataFormats.Text;
                 case "html":
                     return StandardDataFormats.Html;
+                case "bitmap":
+                    return StandardDataFormats.Bitmap;
                 default:
                     return format;
             }
@@ -92,13 +89,15 @@ namespace csclip
             {
                 return "html";
             }
-            else
+            else if (format == StandardDataFormats.Bitmap)
             {
-                return format;
+                return "bitmap";
             }
+
+            return format;
         }
 
-        struct ClipboardData
+        public struct ClipboardData
         {
             public string cf; // Clipboard format
             public string data;
@@ -117,6 +116,10 @@ namespace csclip
                     norm.cf = StandardDataFormats.Html;
                     norm.data = (org.data == null) ? null : HtmlFormatHelper.CreateHtmlFormat(org.data);
                     break;
+                case "bitmap":
+                    norm.cf = StandardDataFormats.Bitmap;
+                    norm.data = org.data;
+                    break;
                 default:
                     return org;
             }
@@ -133,19 +136,31 @@ namespace csclip
             Clipboard.ContentChanged += ClipboardContentChangedHandler;
         }
 
+        async Task<bool> CheckDataFormatAsync(string format)
+        {
+            var data = await m_mainThread.InvokeAsync(() =>
+            {
+                return Clipboard.GetContent();
+            });
+
+            return data.Contains(format);
+        }
+
         async void ClipboardContentChangedHandler(object sender, object e)
         {
             try
             {
                 // need delay to make sure data is available in clipboard
                 await Task.Delay(500);
-                var data = await GetDataAsync("text");
+                var cf = (await CheckDataFormatAsync(StandardDataFormats.Bitmap)) ? "bitmap" : "text";
+                var data =  (cf == "bitmap") ? null : await GetDataAsync(cf);
                 foreach (var requester in m_requesters)
                 {
-                    await (requester.Value?.PasteDataAsync(data) ?? Task.CompletedTask);
+                    await (requester.Value?.PasteDataAsync(new ClipboardData { cf = cf, data = data}) ??
+                           Task.CompletedTask);
                 }
             }
-            catch (Exception) { }
+            catch {}
         }
 
         async void OnDeferredDataRequestHandler(DataProviderRequest request)
@@ -154,8 +169,8 @@ namespace csclip
             try
             {
                 var clipboardFormat = StandardToCfFormat(request.FormatId);
-                var data = await (m_requesters?[m_lastCopyId]?.GetDataAsync(clipboardFormat)
-                    ?? Task.FromResult<string>(null));
+                var data = await (m_requesters?[m_lastReqId]?.GetDataAsync(clipboardFormat) ??
+                                  Task.FromResult<string>(null));
 
                 // Get and put data in request
                 var norm = NormalizeClipboardData(new ClipboardData { cf = clipboardFormat, data = data });
@@ -164,7 +179,7 @@ namespace csclip
                     request.SetData(norm.data);
                 }
             }
-            catch (Exception) { }
+            catch {}
             finally
             {
                 deferral.Complete();
@@ -197,12 +212,74 @@ namespace csclip
                         Clipboard.SetContent(package);
                         break;
                     }
-                    catch (Exception) { }
+                    catch {}
                     await Task.Delay(100);
                 }
 
-                m_lastCopyId = id;
+                m_lastReqId = id;
             });
+        }
+
+        async Task<string> GetDataAsync(string format)
+        {
+            return await GetDataToFileAsync(new SaveDataToFileOptions { cf = format });
+        }
+
+        public struct SaveDataToFileOptions
+        {
+            public string cf;
+            public string store_path;
+        }
+
+        async Task<string> GetDataToFileAsync(SaveDataToFileOptions options)
+        {
+            var data = await m_mainThread.InvokeAsync(() =>
+            {
+                return Clipboard.GetContent();
+            });
+
+            var stdFormat = CfToStandardFormat(options.cf);
+
+            try
+            {
+                if (data.Contains(stdFormat))
+                {
+                    if (options.store_path == null)
+                    {
+                        return (string)await data.GetDataAsync(stdFormat); ;
+                    }
+                    else
+                    {
+                        var rawPayload = await data.GetDataAsync(stdFormat);
+                        if (rawPayload is RandomAccessStreamReference)
+                        {
+                            var fileName = Guid.NewGuid().ToString();
+                            _ = Task.Run(async () =>
+                            {
+                                var sin = await (rawPayload as RandomAccessStreamReference).OpenReadAsync();
+                                var tempFile = await StorageFile.CreateStreamedFileAsync("temp", async (sout) =>
+                                {
+                                    await RandomAccessStream.CopyAndCloseAsync(sin, sout);
+                                }, null);
+
+                                var path = Path.GetFullPath(options.store_path);
+                                (new FileInfo(path)).Directory.Create();
+                                var folder = await StorageFolder.GetFolderFromPathAsync(path);
+                                _ = tempFile.CopyAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+                            });
+
+                            return fileName;
+                        }
+                        else if (rawPayload is string)
+                        {
+                            return rawPayload as string;
+                        }
+                    }
+                }
+            }
+            catch {}
+
+            return "";
         }
 
         async Task ExecuteCopyAsync()
@@ -232,27 +309,6 @@ namespace csclip
             await CopyAsync(-1, data);
         }
 
-        async Task<string> GetDataAsync(string format)
-        {
-            var data = await m_mainThread.InvokeAsync(() =>
-            {
-                return Clipboard.GetContent();
-            });
-
-            var standardFormat = CfToStandardFormat(format);
-
-            try
-            {
-                if (data.Contains(format))
-                {
-                    return (string)await data.GetDataAsync(format); ;
-                }
-            }
-            catch (Exception) { }
-
-            return "";
-        }
-
         async Task ExecutePasteAsync(PasteOptions opts)
         {
             var data = await GetDataAsync(opts.Format);
@@ -262,10 +318,10 @@ namespace csclip
         public interface IRequest
         {
             // Sent:
-            // - paste: <text data> -> nil
+            // - paste: {cf:, data:} -> nil
             // - get: <data format> -> <requested data>
             [JsonRpcMethod("paste")]
-            Task PasteDataAsync(string text);
+            Task PasteDataAsync(ClipboardData text);
 
             [JsonRpcMethod("get")]
             Task<string> GetDataAsync(string format);
@@ -284,6 +340,7 @@ namespace csclip
             // Received:
             // - :copy:  [{cf:, data:}+] -> nil
             // - :get: <data format> -> <requested data>
+            // - :get-to-file: {cf:, store_path:} -> <saved file name>
             [JsonRpcMethod("copy")]
             public async Task HandleCopyDataAsync(IList<ClipboardData> data)
             {
@@ -294,6 +351,12 @@ namespace csclip
             public async Task<string> HandleGetDataAsync(string format)
             {
                 return await m_owner.GetDataAsync(format);
+            }
+
+            [JsonRpcMethod("get-to-file")]
+            public async Task<string> HandleGetDataToFileAsync(SaveDataToFileOptions options)
+            {
+                return await m_owner.GetDataToFileAsync(options);
             }
         }
 
@@ -318,12 +381,12 @@ namespace csclip
 
                             rpc.AddLocalRpcTarget(new Responser(id, this));
 
-                                // Initiate JSON-RPC message processing.
-                                rpc.StartListening();
+                            // Initiate JSON-RPC message processing.
+                            rpc.StartListening();
 
                             await rpc.Completion;
                         }
-                        catch (Exception) { }
+                        catch {}
                         finally
                         {
                             m_requesters.TryRemove(id, out IRequest requester);
@@ -349,7 +412,7 @@ namespace csclip
         private readonly RunInMainThread m_mainThread = null;
         private TcpListener m_listener = null;
         private ConcurrentDictionary<int, IRequest> m_requesters;
-        private int m_lastCopyId = -1;
+        private int m_lastReqId = -1;
 
         private static int s_counter = -1;
 
@@ -368,7 +431,7 @@ namespace csclip
                 {
                     Clipboard.Flush();
                 }
-                catch (Exception) { }
+                catch {}
             });
         }
 

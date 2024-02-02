@@ -1,20 +1,20 @@
-﻿namespace csclip
-{
-    using CommandLine;
-    using Microsoft.VisualStudio.Threading;
-    using Newtonsoft.Json;
-    using StreamJsonRpc;
-    using System;
-    using System.Collections.Concurrent;
-    using System.Collections.Generic;
-    using System.IO;
-    using System.Net;
-    using System.Net.Sockets;
-    using System.Threading;
-    using System.Threading.Tasks;
-    using System.Windows.Threading;
-    using Windows.ApplicationModel.DataTransfer;
+﻿using CommandLine;
+using Microsoft.VisualStudio.Threading;
+using Newtonsoft.Json;
+using StreamJsonRpc;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Threading;
+using Windows.ApplicationModel.DataTransfer;
 
+namespace csclip
+{
     class RunInMainThread
     {
         public RunInMainThread(TaskScheduler taskScheduler)
@@ -364,7 +364,11 @@
 
             await m_mainThread.InvokeAsync(() =>
             {
-                Clipboard.Flush();
+                try
+                {
+                    Clipboard.Flush();
+                }
+                catch (Exception) { }
             });
         }
 
@@ -393,7 +397,7 @@
 
             // Message pump
             Dispatcher.Run();
-           
+
         }
 
     }

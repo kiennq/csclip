@@ -9,7 +9,7 @@
   </PropertyGroup>
   <PropertyGroup>
     <!-- Each part of the assembly version must be <=65535, so we must use a shorter format. -->
-    <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`MMdd.HHmm`)).0</BinaryVersion>
+    <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`yy.MMdd.HHmm`))</BinaryVersion>
     <BinaryVersion Condition="'$(BinaryVersion)' == ''">0.$(BUILD_BUILDNUMBER).0</BinaryVersion>
   </PropertyGroup>
 </Project>

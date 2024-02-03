@@ -240,44 +240,45 @@ namespace csclip
 
             var stdFormat = CfToStandardFormat(options.cf);
 
-            try
+            if (data.Contains(stdFormat))
             {
-                if (data.Contains(stdFormat))
+                if (options.store_path == null)
                 {
-                    if (options.store_path == null)
+                    return (string)await data.GetDataAsync(stdFormat); ;
+                }
+                else
+                {
+                    var blob = await data.GetDataAsync(stdFormat);
+                    if (blob is RandomAccessStreamReference)
                     {
-                        return (string)await data.GetDataAsync(stdFormat); ;
-                    }
-                    else
-                    {
-                        var rawPayload = await data.GetDataAsync(stdFormat);
-                        if (rawPayload is RandomAccessStreamReference)
+                        var sblob = await (blob as RandomAccessStreamReference).OpenReadAsync();
+                        var ext = MimeTypes.MimeTypeMap.GetExtension(sblob.ContentType);
+                        var fileName = $"{Guid.NewGuid().ToString()}{ext}";
+                        _ = Task.Run(async () =>
                         {
-                            var fileName = Guid.NewGuid().ToString();
-                            _ = Task.Run(async () =>
+                            try
                             {
-                                var sin = await (rawPayload as RandomAccessStreamReference).OpenReadAsync();
                                 var tempFile = await StorageFile.CreateStreamedFileAsync("temp", async (sout) =>
                                 {
-                                    await RandomAccessStream.CopyAndCloseAsync(sin, sout);
+                                    await RandomAccessStream.CopyAndCloseAsync(sblob, sout);
                                 }, null);
 
-                                var path = Path.GetFullPath(options.store_path);
+                                var path = Path.GetFullPath($"{options.store_path}/");
                                 (new FileInfo(path)).Directory.Create();
                                 var folder = await StorageFolder.GetFolderFromPathAsync(path);
-                                _ = tempFile.CopyAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
-                            });
+                                await tempFile.CopyAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+                            }
+                            catch { }
+                        });
 
-                            return fileName;
-                        }
-                        else if (rawPayload is string)
-                        {
-                            return rawPayload as string;
-                        }
+                        return fileName;
+                    }
+                    else if (blob is string)
+                    {
+                        return blob as string;
                     }
                 }
             }
-            catch {}
 
             return "";
         }

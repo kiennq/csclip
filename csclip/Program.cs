@@ -228,7 +228,8 @@ namespace csclip
         public struct SaveDataToFileOptions
         {
             public string cf;
-            public string store_path;
+            public string path;
+            public string prefix;
         }
 
         async Task<string> GetDataToFileAsync(SaveDataToFileOptions options)
@@ -242,7 +243,7 @@ namespace csclip
 
             if (data.Contains(stdFormat))
             {
-                if (options.store_path == null)
+                if (options.path == null)
                 {
                     return (string)await data.GetDataAsync(stdFormat); ;
                 }
@@ -253,7 +254,7 @@ namespace csclip
                     {
                         var sblob = await (blob as RandomAccessStreamReference).OpenReadAsync();
                         var ext = MimeTypes.MimeTypeMap.GetExtension(sblob.ContentType);
-                        var fileName = $"{Guid.NewGuid().ToString()}{ext}";
+                        var fileName = $"{options.prefix}{Guid.NewGuid()}{ext}";
                         _ = Task.Run(async () =>
                         {
                             try
@@ -263,7 +264,8 @@ namespace csclip
                                     await RandomAccessStream.CopyAndCloseAsync(sblob, sout);
                                 }, null);
 
-                                var path = Path.GetFullPath($"{options.store_path}/");
+                                var path = Path.GetFullPath($"{options.path}/");
+                                // Ensure the directory exists
                                 (new FileInfo(path)).Directory.Create();
                                 var folder = await StorageFolder.GetFolderFromPathAsync(path);
                                 await tempFile.CopyAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
@@ -341,7 +343,7 @@ namespace csclip
             // Received:
             // - :copy:  [{cf:, data:}+] -> nil
             // - :get: <data format> -> <requested data>
-            // - :get-to-file: {cf:, store_path:} -> <saved file name>
+            // - :get-to-file: {cf:, path:} -> <saved file name>
             [JsonRpcMethod("copy")]
             public async Task HandleCopyDataAsync(IList<ClipboardData> data)
             {

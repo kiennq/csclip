@@ -8,8 +8,16 @@
     <PackageRoot>$(RepoRoot)packages\</PackageRoot>
   </PropertyGroup>
   <PropertyGroup>
+    <LangVersion>13.0</LangVersion>
+    <PlatformVersion>10.0.22621.0</PlatformVersion>
+    <PlatformMinVersion>10.0.18362.0</PlatformMinVersion>
+  </PropertyGroup>
+  <PropertyGroup>
     <!-- Each part of the assembly version must be <=65535, so we must use a shorter format. -->
     <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`yy.MMdd.HHmm`))</BinaryVersion>
     <BinaryVersion Condition="'$(BinaryVersion)' == ''">0.$(BUILD_BUILDNUMBER).0</BinaryVersion>
+    <AssemblyVersion>$(BinaryVersion)</AssemblyVersion>
+    <FileVersion>$(BinaryVersion)</FileVersion>
+    <InformationalVersion>$(BinaryVersion)</InformationalVersion>
   </PropertyGroup>
 </Project>

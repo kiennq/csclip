@@ -52,7 +52,7 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           tag: v${{ env.version }}
-          name: csclip.${{ env.version }}
+          name: v${{ env.version }}
           draft: false
           prerelease: ${{ env.prerelease }}
           artifactErrorsFailBuild: true

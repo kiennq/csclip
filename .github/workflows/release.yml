@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # weekly
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'version'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      MSYS2_PATH_TYPE: inherit
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest release
+        continue-on-error: true
+        id: cur_release
+        uses: pozetroninc/github-action-get-latest-release@master
+        with:
+          repository: ${{ github.repository }}
+          excludes: draft
+
+      - name: Get version
+        shell: bash
+        run: |
+          base_ver=$(cat version)
+          prerelease=$([[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch"  ]] && echo true || echo false)
+          version=$([[ $prerelease == true  ]] && echo ${base_ver}.${{ github.run_number }} || echo ${base_ver})
+          cur_ver=$([[ ${{ steps.cur_release.outcome }} == failure ]] && echo v0 || echo ${{ steps.cur_release.outputs.release }})
+          [[ v$version == $cur_ver ]] && exit 1
+          echo "version=$version" >> $GITHUB_ENV
+          echo "prerelease=$prerelease" >> $GITHUB_ENV
+          echo "BUILD_BUILDNUMBER=$version" >> $GITHUB_ENV
+
+      - name: Build
+        shell: pwsh
+        run: |
+          .github/scripts/setenv.ps1
+          ./build/build.ps1 -Configuration Release -Platform anycpu -Project csclip -Publish
+
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ env.version }}
+          name: csclip.${{ env.version }}
+          draft: false
+          prerelease: ${{ env.prerelease }}
+          artifactErrorsFailBuild: true
+          artifacts: publish/csclip.tar.xz
+          artifactContentType: application/zip
+          token: ${{ secrets.GITHUB_TOKEN }}

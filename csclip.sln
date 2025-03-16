@@ -1,12 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27428.2043
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35828.75 d17.13
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution files", "Solution files", "{F848B1EB-6447-4F39-A729-33BAFB656B3A}"
 	ProjectSection(SolutionItems) = preProject
 		Common.props = Common.props
 		Common.targets = Common.targets
+		version = version
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csclip", "csclip\csclip.csproj", "{F328A7B2-C786-4578-B631-795885896361}"

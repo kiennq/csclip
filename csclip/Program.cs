@@ -13,7 +13,8 @@ using System.Windows.Threading;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Streams;
-using SkiaSharp;
+using System.Drawing.Imaging;
+using System.Drawing;
 
 namespace csclip
 {
@@ -233,12 +234,15 @@ namespace csclip
                             {
                                 var tempFile = await StorageFile.CreateStreamedFileAsync("temp", (req) =>
                                 {
-                                    using (var skImage = SKImage.FromEncodedData(sblob.AsStream()))
+                                    using (var image = Image.FromStream(sblob.AsStream()))
                                     using (var outputStream = req.AsStreamForWrite())
                                     {
-                                        var skData = skImage.Encode(MimeToSKImageFormat[contentType], 100);
-                                        skData.SaveTo(outputStream);
+                                        var encoderParameters = new EncoderParameters(1);
+                                        encoderParameters.Param[0] = new EncoderParameter(Encoder.Quality, 100L);
+                                        var codec = GetEncoder(MimeToImageFormat[contentType]);
+                                        image.Save(outputStream, codec, encoderParameters);
                                     }
+
                                 }, null);
 
                                 var path = Path.GetFullPath($"{options.path}/");
@@ -247,7 +251,7 @@ namespace csclip
                                 var folder = await StorageFolder.GetFolderFromPathAsync(path);
                                 await tempFile.CopyAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
                             }
-                            catch (Exception) {}
+                            catch (Exception) { }
                         });
 
                         return fileName;
@@ -260,6 +264,19 @@ namespace csclip
             }
 
             return string.Empty;
+        }
+
+        private static ImageCodecInfo GetEncoder(ImageFormat format)
+        {
+            var codecs = ImageCodecInfo.GetImageEncoders();
+            foreach (var codec in codecs)
+            {
+                if (codec.FormatID == format.Guid)
+                {
+                    return codec;
+                }
+            }
+            return null;
         }
 
         async Task ExecuteCopyAsync()
@@ -293,7 +310,7 @@ namespace csclip
             Console.Write(data);
         }
 
-        public interface IRequest
+        public interface IRequest : IDisposable
         {
             // Sent:
             // - paste: {cf:, data:} -> nil
@@ -351,31 +368,31 @@ namespace csclip
                     var conn = await _listener.AcceptTcpClientAsync();
                     _ = Task.Run(async () =>
                     {
-                        int id = Interlocked.Increment(ref Counter);
-                        try
+                        var rpc = new JsonRpc(conn.GetStream());
+                        using (conn)
+                        using (var requester = rpc.Attach<IRequest>())
                         {
-                            var rpc = new JsonRpc(conn.GetStream());
-                            _requesters[id] = rpc.Attach<IRequest>();
-
-                            rpc.AddLocalRpcTarget(new Responser(id, this));
-
-                            // Initiate JSON-RPC message processing.
-                            rpc.StartListening();
-
-                            await rpc.Completion;
-                        }
-                        catch {}
-                        finally
-                        {
-                            _requesters.TryRemove(id, out IRequest requester);
-                            conn.Close();
-
-                            if (_requesters.IsEmpty)
+                            var id = Interlocked.Increment(ref Counter);
+                            try
                             {
-                                _listener.Stop();
-                            }
+                                _requesters[id] = requester;
 
-                            ((IDisposable)requester)?.Dispose();
+                                rpc.AddLocalRpcTarget(new Responser(id, this));
+
+                                // Initiate JSON-RPC message processing.
+                                rpc.StartListening();
+
+                                await rpc.Completion;
+                            }
+                            catch { }
+                            finally
+                            {
+                                _requesters.TryRemove(id, out _);
+                                if (_requesters.IsEmpty)
+                                {
+                                    _listener.Stop();
+                                }
+                            }
                         }
                     });
                 }
@@ -393,20 +410,23 @@ namespace csclip
         private int _lastReqId = -1;
 
         private static int Counter = -1;
-        private static readonly Dictionary<string, SKEncodedImageFormat> MimeToSKImageFormat = new Dictionary<string, SKEncodedImageFormat>
-        {
+        private static readonly Dictionary<string, ImageFormat> MimeToImageFormat = new Dictionary<string, ImageFormat>
+        { 
             // Images
-            { "image/jpeg", SKEncodedImageFormat.Jpeg },
-            { "image/png", SKEncodedImageFormat.Png },
-            { "image/gif", SKEncodedImageFormat.Gif },
-            { "image/webp", SKEncodedImageFormat.Webp },
-            { "image/bmp", SKEncodedImageFormat.Bmp },
-            { "image/heif", SKEncodedImageFormat.Heif },
-            
-            // Others
-            { "image/avif", SKEncodedImageFormat.Avif },
-            { "image/x-icon", SKEncodedImageFormat.Ico },
+            { "image/bmp", ImageFormat.Bmp },
+            { "image/emf", ImageFormat.Emf },
+            { "image/exif", ImageFormat.Exif },
+            { "image/gif", ImageFormat.Gif },
+            { "image/jpeg", ImageFormat.Jpeg },
+            { "image/png", ImageFormat.Png },
+            { "image/tiff", ImageFormat.Tiff },
+            { "image/wmf", ImageFormat.Wmf },
+            { "image/x-citrix-jpeg", ImageFormat.Jpeg },
+            { "image/x-citrix-png", ImageFormat.Png },
+            { "image/x-icon", ImageFormat.Icon }, 
+            { "image/x-png", ImageFormat.Png },
         };
+
 
         public async Task RunAsync(string[] args)
         {

@@ -13,7 +13,7 @@ using System.Windows.Threading;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Streams;
-using ImageMagick;
+using SkiaSharp;
 
 namespace csclip
 {
@@ -233,12 +233,11 @@ namespace csclip
                             {
                                 var tempFile = await StorageFile.CreateStreamedFileAsync("temp", (req) =>
                                 {
-                                    using (var image = new MagickImage(sblob.AsStream()))
-                                    using (var output = req.AsStreamForWrite())
+                                    using (var skImage = SKImage.FromEncodedData(sblob.AsStream()))
+                                    using (var outputStream = req.AsStreamForWrite())
                                     {
-                                        // convert from content type to image format
-                                        image.Format = MimeToMagickFormat[contentType];
-                                        image.Write(output);
+                                        var skData = skImage.Encode(MimeToSKImageFormat[contentType], 100);
+                                        skData.SaveTo(outputStream);
                                     }
                                 }, null);
 
@@ -276,19 +275,13 @@ namespace csclip
                         data = JsonSerializer.Deserialize<List<ClipboardData>>(text);
                         break;
                     default:
-                        data = new List<ClipboardData>
-                        {
-                            JsonSerializer.Deserialize<ClipboardData>(text)
-                        };
+                        data = [JsonSerializer.Deserialize<ClipboardData>(text)];
                         break;
                 }
             }
             catch (JsonException)
             {
-                data = new List<ClipboardData>
-                { 
-                    JsonSerializer.Deserialize<ClipboardData>(text)
-                };
+                data = [new ClipboardData { cf = "text", data = text }];
             }
 
             await CopyAsync(-1, data);
@@ -400,25 +393,19 @@ namespace csclip
         private int _lastReqId = -1;
 
         private static int Counter = -1;
-        private static readonly Dictionary<string, MagickFormat> MimeToMagickFormat = new Dictionary<string, MagickFormat>
+        private static readonly Dictionary<string, SKEncodedImageFormat> MimeToSKImageFormat = new Dictionary<string, SKEncodedImageFormat>
         {
             // Images
-            { "image/jpeg", MagickFormat.Jpeg },
-            { "image/png", MagickFormat.Png },
-            { "image/gif", MagickFormat.Gif },
-            { "image/tiff", MagickFormat.Tiff },
-            { "image/webp", MagickFormat.WebP },
-            { "image/svg+xml", MagickFormat.Svg },
-            { "image/bmp", MagickFormat.Bmp },
-            { "image/heic", MagickFormat.Heic },
-            { "image/heif", MagickFormat.Heif },
-            
-            // PDFs
-            { "application/pdf", MagickFormat.Pdf },
+            { "image/jpeg", SKEncodedImageFormat.Jpeg },
+            { "image/png", SKEncodedImageFormat.Png },
+            { "image/gif", SKEncodedImageFormat.Gif },
+            { "image/webp", SKEncodedImageFormat.Webp },
+            { "image/bmp", SKEncodedImageFormat.Bmp },
+            { "image/heif", SKEncodedImageFormat.Heif },
             
             // Others
-            { "image/avif", MagickFormat.Avif },
-            { "image/x-icon", MagickFormat.Ico },
+            { "image/avif", SKEncodedImageFormat.Avif },
+            { "image/x-icon", SKEncodedImageFormat.Ico },
         };
 
         public async Task RunAsync(string[] args)
@@ -456,8 +443,12 @@ namespace csclip
             var app = new App();
             _ = app.RunAsync(args);
 
-            // Message pump
-            Dispatcher.Run();
+            try
+            {
+                // Message pump
+                Dispatcher.Run();
+            }
+            catch { }
         }
 
     }

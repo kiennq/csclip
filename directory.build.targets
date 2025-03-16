@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(PackageRoot)MSBuildTasks.1.5.0.235\build\MSBuildTasks.targets" Condition="Exists('$(PackageRoot)MSBuildTasks.1.5.0.235')" />
   <Target Name="GenerateVersionCS" BeforeTargets="BeforeCompile">
     <AssemblyInfo CodeLanguage="CS" AssemblyVersion="$(BinaryVersion)" AssemblyFileVersion="$(BinaryVersion)" OutputFile="$(IntermediateOutputPath)GeneratedVersion.cs" />
     <ItemGroup>

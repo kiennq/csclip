@@ -1,23 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <!-- Useful paths. -->
-  <PropertyGroup>
-    <RepoRoot>$([System.IO.Path]::GetFullPath($(MSBuildThisFileDirectory)))\</RepoRoot>
-    <BinReleaseRoot>$(RepoRoot)release\bin\</BinReleaseRoot>
-    <TestReleaseRoot>$(RepoRoot)release\test\</TestReleaseRoot>
-    <PackageRoot>$(RepoRoot)packages\</PackageRoot>
-  </PropertyGroup>
-  <PropertyGroup>
-    <LangVersion>13.0</LangVersion>
-    <PlatformVersion>10.0.22621.0</PlatformVersion>
-    <PlatformMinVersion>10.0.18362.0</PlatformMinVersion>
-  </PropertyGroup>
-  <PropertyGroup>
-    <!-- Each part of the assembly version must be <=65535, so we must use a shorter format. -->
-    <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`yy.MMdd.HHmm`))</BinaryVersion>
-    <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' != ''">$(BUILD_BUILDNUMBER)</BinaryVersion>
-    <AssemblyVersion>$(BinaryVersion)</AssemblyVersion>
-    <FileVersion>$(BinaryVersion)</FileVersion>
-    <InformationalVersion>$(BinaryVersion)</InformationalVersion>
-  </PropertyGroup>
+    <!-- Useful paths. -->
+    <PropertyGroup>
+        <RepoRoot>$([System.IO.Path]::GetFullPath($(MSBuildThisFileDirectory)))\</RepoRoot>
+        <BinReleaseRoot>$(RepoRoot)release\bin\</BinReleaseRoot>
+        <TestReleaseRoot>$(RepoRoot)release\test\</TestReleaseRoot>
+        <PackageRoot>$(RepoRoot)packages\</PackageRoot>
+    </PropertyGroup>
+    <PropertyGroup>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <Features>strict</Features>
+        <PublishAot>true</PublishAot>
+        <PublishTrimmed>true</PublishTrimmed>
+        <SelfContained>true</SelfContained>
+        <PublishSingleFile>true</PublishSingleFile>
+        <LangVersion>13.0</LangVersion>
+
+        <PlatformVersion>10.0.22621.0</PlatformVersion>
+        <PlatformMinVersion>10.0.18362.0</PlatformMinVersion>
+
+        <!-- Windows SDK Versions -->
+        <TargetPlatformVersion Condition="'$(TargetPlatformVersion)' == ''">$(PlatformVersion)</TargetPlatformVersion>
+        <TargetPlatformMinVersion>$(PlatformMinVersion)</TargetPlatformMinVersion>
+        <TargetFramework>net9.0-windows$(TargetPlatformVersion)</TargetFramework>
+
+        <CsWinRTIIDOptimizerOptOut>true</CsWinRTIIDOptimizerOptOut>
+    </PropertyGroup>
+    <PropertyGroup>
+        <!-- Each part of the assembly version must be <=65535, so we must use a shorter format. -->
+        <BinaryVersion Condition="'$(BUILD_BUILDNUMBER)' == '' OR $(BUILD_BUILDNUMBER.StartsWith('PR-'))">0.$([System.DateTime]::Now.ToString(`yy.MMdd.HHmm`))</BinaryVersion>
+        <BinaryVersion Condition="'$(BinaryVersion)' == ''">0.$(BUILD_BUILDNUMBER).0</BinaryVersion>
+        <AssemblyVersion>$(BinaryVersion)</AssemblyVersion>
+        <FileVersion>$(BinaryVersion)</FileVersion>
+        <InformationalVersion>$(BinaryVersion)</InformationalVersion>
+    </PropertyGroup>
 </Project>

@@ -1,24 +1,18 @@
 ﻿using CommandLine;
-using System.Text.Json;
+using Microsoft.VisualStudio.Threading;
 using StreamJsonRpc;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Threading;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Streams;
-using System.Drawing.Imaging;
-using System.Drawing;
+using System.Windows.Threading;
+using System.Text.Json;
 
 namespace csclip
 {
-    public class App
+    public partial class App
     {
 
         [Verb("copy", HelpText = "Copy to clipboard through pipe using clipboard data format {\"cf\":, \"data\":}")]
@@ -28,14 +22,14 @@ namespace csclip
         class PasteOptions
         {
             [Option('f', "format", Default = "text", HelpText = "Clipboard format. Supported format: <text|html>.")]
-            public string Format { get; set; }
+            public required string Format { get; set; }
         }
 
         [Verb("server", HelpText = "Interactively get/put data to clipboard. Using jsonrpc")]
         class ServerOptions
         {
             [Option('h', "host", Default = "0.0.0.0", HelpText = "Tcp host")]
-            public string Host { get; set; }
+            public required string Host { get; set; }
             [Option('p', "port", Default = 9123, HelpText = "Tcp port")]
             public int Port { get; set; }
         }
@@ -73,49 +67,54 @@ namespace csclip
             return format;
         }
 
-        public struct ClipboardData
+        public record ClipboardData(string cf, string? data);
+
+        // ClipboardData source generator context
+        [JsonSerializable(typeof(ClipboardData))]
+        [JsonSerializable(typeof(List<ClipboardData>))]
+        internal partial class SrcGenCtx : JsonSerializerContext
         {
-            public string cf; // Clipboard format
-            public string data;
         }
+
 
         static ClipboardData NormalizeClipboardData(ClipboardData org)
         {
-            var norm = new ClipboardData();
             switch (org.cf)
             {
                 case "text":
-                    norm.cf = StandardDataFormats.Text;
-                    norm.data = org.data;
-                    break;
+                    return new ClipboardData(
+                        cf: StandardDataFormats.Text,
+                        data: (org.data == null) ? string.Empty : HtmlFormatHelper.CreateHtmlFormat(org.data));
                 case "html":
-                    norm.cf = StandardDataFormats.Html;
-                    norm.data = (org.data == null) ? null : HtmlFormatHelper.CreateHtmlFormat(org.data);
-                    break;
+                    return new ClipboardData(
+                        cf: StandardDataFormats.Html,
+                        data: (org.data == null) ? string.Empty : HtmlFormatHelper.CreateHtmlFormat(org.data));
                 case "bitmap":
-                    norm.cf = StandardDataFormats.Bitmap;
-                    norm.data = org.data;
-                    break;
+                    return new ClipboardData(
+                        cf: StandardDataFormats.Bitmap,
+                        data: org.data);
                 default:
                     return org;
             }
-
-            return norm;
         }
 
         public App()
         {
+            _dispatcher = Dispatcher.CurrentDispatcher;
             Clipboard.ContentChanged += ClipboardContentChangedHandler;
         }
 
         async Task<bool> CheckDataFormatAsync(string format)
         {
-            await _dispatcher.Resume();
-            var data = Clipboard.GetContent();
+            var data = await _dispatcher.InvokeAsync(() =>
+            {
+                return Clipboard.GetContent();
+            });
+
             return data.Contains(format);
         }
 
-        void ClipboardContentChangedHandler(object sender, object e)
+        void ClipboardContentChangedHandler(object? sender, object? e)
         {
             _ = Task.Run(async () =>
             {
@@ -124,7 +123,7 @@ namespace csclip
                 var data = (cf == "bitmap") ? null : await GetDataAsync(cf);
                 foreach (var requester in _requesters)
                 {
-                    await (requester.Value?.PasteDataAsync(new ClipboardData { cf = cf, data = data }) ?? Task.CompletedTask);
+                    await (requester.Value?.PasteDataAsync(new ClipboardData(cf, data)) ?? Task.CompletedTask);
                 }
             });
         }
@@ -141,7 +140,7 @@ namespace csclip
                                       Task.FromResult<string>(string.Empty));
 
                     // Get and put data in request
-                    var norm = NormalizeClipboardData(new ClipboardData { cf = clipboardFormat, data = data });
+                    var norm = NormalizeClipboardData(new ClipboardData(cf: clipboardFormat, data));
                     if (norm.cf == request.FormatId)
                     {
                         request.SetData(norm.data);
@@ -155,13 +154,14 @@ namespace csclip
             });
         }
 
-        async Task CopyAsync(int id, IList<ClipboardData> data)
+        async Task CopyAsync(int id, IList<ClipboardData>? data)
         {
             var package = new DataPackage();
             if (data == null)
             {
                 return;
             }
+
             foreach (var d in data)
             {
                 var norm = NormalizeClipboardData(d);
@@ -175,20 +175,23 @@ namespace csclip
                 }
             }
 
-            await _dispatcher.Resume();
-            // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
-            for (int i = 0; i < 10; i++)
+            await _dispatcher.InvokeAsync(async () =>
             {
-                try
+                // Need this https://stackoverflow.com/questions/68666/clipbrd-e-cant-open-error-when-setting-the-clipboard-from-net
+                const int retry = 10;
+                for (int i = 0; i < retry; i++)
                 {
-                    Clipboard.SetContent(package);
-                    break;
+                    try
+                    {
+                        Clipboard.SetContent(package);
+                        break;
+                    }
+                    catch {}
+                    await Task.Delay(100);
                 }
-                catch { }
-                await Task.Delay(100);
-            }
 
-            _lastReqId = id;
+                _lastReqId = id;
+            });
         }
 
         async Task<string> GetDataAsync(string format)
@@ -201,16 +204,15 @@ namespace csclip
             public string cf;
             public string path;
             public string prefix;
-            public string mime;
         }
 
         async Task<string> GetDataToFileAsync(SaveDataToFileOptions options)
         {
-            await _dispatcher.Resume();
-            var data = Clipboard.GetContent();
+            var data = await _dispatcher.InvokeAsync(() =>
+            {
+                return Clipboard.GetContent();
+            });
 
-            // Ensure we're not blocking the UI thread
-            await Task.Delay(0).ConfigureAwait(false);
             var stdFormat = CfToStandardFormat(options.cf);
 
             if (data.Contains(stdFormat))
@@ -224,41 +226,36 @@ namespace csclip
                     var blob = await data.GetDataAsync(stdFormat);
                     if (blob is RandomAccessStreamReference)
                     {
-                        var sblob = await (blob as RandomAccessStreamReference).OpenReadAsync();
-                        var contentType = options.mime ?? sblob.ContentType;
-                        var ext = MimeTypes.MimeTypeMap.GetExtension(contentType);
+                        var sblob = await (blob as RandomAccessStreamReference)?.OpenReadAsync();
+                        var ext = MimeTypes.MimeTypeMap.GetExtension(sblob.ContentType);
                         var fileName = $"{options.prefix}{Guid.NewGuid()}{ext}";
                         _ = Task.Run(async () =>
                         {
                             try
                             {
-                                var tempFile = await StorageFile.CreateStreamedFileAsync("temp", (req) =>
+                                var tempFile = await StorageFile.CreateStreamedFileAsync("temp", (sout) =>
                                 {
-                                    using (var image = Image.FromStream(sblob.AsStream()))
-                                    using (var outputStream = req.AsStreamForWrite())
+                                    _ = Task.Run(async () =>
                                     {
-                                        var encoderParameters = new EncoderParameters(1);
-                                        encoderParameters.Param[0] = new EncoderParameter(Encoder.Quality, 100L);
-                                        var codec = GetEncoder(MimeToImageFormat[contentType]);
-                                        image.Save(outputStream, codec, encoderParameters);
-                                    }
-
+                                        // Copy stream to file
+                                        await RandomAccessStream.CopyAndCloseAsync(sblob, sout);
+                                    });
                                 }, null);
 
                                 var path = Path.GetFullPath($"{options.path}/");
                                 // Ensure the directory exists
-                                (new FileInfo(path)).Directory.Create();
+                                (new FileInfo(path)).Directory?.Create();
                                 var folder = await StorageFolder.GetFolderFromPathAsync(path);
                                 await tempFile.CopyAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
                             }
-                            catch (Exception) { }
+                            catch { }
                         });
 
                         return fileName;
                     }
                     else if (blob is string)
                     {
-                        return blob as string;
+                        return blob as string ?? string.Empty;
                     }
                 }
             }
@@ -266,22 +263,9 @@ namespace csclip
             return string.Empty;
         }
 
-        private static ImageCodecInfo GetEncoder(ImageFormat format)
-        {
-            var codecs = ImageCodecInfo.GetImageEncoders();
-            foreach (var codec in codecs)
-            {
-                if (codec.FormatID == format.Guid)
-                {
-                    return codec;
-                }
-            }
-            return null;
-        }
-
         async Task ExecuteCopyAsync()
         {
-            List<ClipboardData> data;
+            List<ClipboardData>? data;
 
             var text = await Console.In.ReadToEndAsync();
             try
@@ -289,16 +273,16 @@ namespace csclip
                 switch (text[0])
                 {
                     case '[':
-                        data = JsonSerializer.Deserialize<List<ClipboardData>>(text);
+                        data = JsonSerializer.Deserialize<List<ClipboardData>>(text, SrcGenCtx.Default.ListClipboardData);
                         break;
                     default:
-                        data = [JsonSerializer.Deserialize<ClipboardData>(text)];
+                        data = [JsonSerializer.Deserialize<ClipboardData>(text, SrcGenCtx.Default.ClipboardData)];
                         break;
                 }
             }
             catch (JsonException)
             {
-                data = [new ClipboardData { cf = "text", data = text }];
+                data = [new ClipboardData(cf: "text", data: text)];
             }
 
             await CopyAsync(-1, data);
@@ -310,7 +294,7 @@ namespace csclip
             Console.Write(data);
         }
 
-        public interface IRequest : IDisposable
+        public interface IRequest
         {
             // Sent:
             // - paste: {cf:, data:} -> nil
@@ -322,15 +306,8 @@ namespace csclip
             Task<string> GetDataAsync(string format);
         }
 
-        class Responser
+        class Responser(int id, App prog)
         {
-            private App _app = null;
-            private int _id = 0;
-            public Responser(int id, App app)
-            {
-                _id = id;
-                _app = app;
-            }
 
             // Received:
             // - :copy:  [{cf:, data:}+] -> nil
@@ -339,19 +316,19 @@ namespace csclip
             [JsonRpcMethod("copy")]
             public async Task HandleCopyDataAsync(IList<ClipboardData> data)
             {
-                await _app.CopyAsync(_id, data);
+                await prog.CopyAsync(id, data);
             }
 
             [JsonRpcMethod("get")]
             public async Task<string> HandleGetDataAsync(string format)
             {
-                return await _app.GetDataAsync(format);
+                return await prog.GetDataAsync(format);
             }
 
             [JsonRpcMethod("get-to-file")]
             public async Task<string> HandleGetDataToFileAsync(SaveDataToFileOptions options)
             {
-                return await _app.GetDataToFileAsync(options);
+                return await prog.GetDataToFileAsync(options);
             }
         }
 
@@ -368,30 +345,32 @@ namespace csclip
                     var conn = await _listener.AcceptTcpClientAsync();
                     _ = Task.Run(async () =>
                     {
-                        var rpc = new JsonRpc(conn.GetStream());
-                        using (conn)
-                        using (var requester = rpc.Attach<IRequest>())
+                        int id = Interlocked.Increment(ref s_counter);
+                        try
                         {
-                            var id = Interlocked.Increment(ref Counter);
-                            try
+                            var rpc = new JsonRpc(conn.GetStream());
+                            _requesters[id] = rpc.Attach<IRequest>();
+
+                            rpc.AddLocalRpcTarget(new Responser(id, this));
+
+                            // Initiate JSON-RPC message processing.
+                            rpc.StartListening();
+
+                            await rpc.Completion;
+                        }
+                        catch {}
+                        finally
+                        {
+                            if (_requesters.TryRemove(id, out IRequest? requester))
                             {
-                                _requesters[id] = requester;
+                                conn.Close();
 
-                                rpc.AddLocalRpcTarget(new Responser(id, this));
-
-                                // Initiate JSON-RPC message processing.
-                                rpc.StartListening();
-
-                                await rpc.Completion;
-                            }
-                            catch { }
-                            finally
-                            {
-                                _requesters.TryRemove(id, out _);
                                 if (_requesters.IsEmpty)
                                 {
                                     _listener.Stop();
                                 }
+
+                                ((IDisposable)requester)?.Dispose();
                             }
                         }
                     });
@@ -404,71 +383,56 @@ namespace csclip
             }
         }
 
-        private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
-        private TcpListener _listener = null;
-        private ConcurrentDictionary<int, IRequest> _requesters;
+        private readonly Dispatcher _dispatcher = null!;
+        private TcpListener _listener = null!;
+        private ConcurrentDictionary<int, IRequest> _requesters = null!;
         private int _lastReqId = -1;
 
-        private static int Counter = -1;
-        private static readonly Dictionary<string, ImageFormat> MimeToImageFormat = new Dictionary<string, ImageFormat>
-        { 
-            // Images
-            { "image/bmp", ImageFormat.Bmp },
-            { "image/emf", ImageFormat.Emf },
-            { "image/exif", ImageFormat.Exif },
-            { "image/gif", ImageFormat.Gif },
-            { "image/jpeg", ImageFormat.Jpeg },
-            { "image/png", ImageFormat.Png },
-            { "image/tiff", ImageFormat.Tiff },
-            { "image/wmf", ImageFormat.Wmf },
-            { "image/x-citrix-jpeg", ImageFormat.Jpeg },
-            { "image/x-citrix-png", ImageFormat.Png },
-            { "image/x-icon", ImageFormat.Icon }, 
-            { "image/x-png", ImageFormat.Png },
-        };
-
+        private static int s_counter = -1;
 
         public async Task RunAsync(string[] args)
         {
-            try
-            {
-                await Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
-                       .MapResult(
-                            (CopyOptions _) => ExecuteCopyAsync(),
-                            (PasteOptions opts) => ExecutePasteAsync(opts),
-                            (ServerOptions opts) => ExecuteServerAsync(opts),
-                            errs => Task.FromResult(0));
+            await Parser.Default.ParseArguments<CopyOptions, PasteOptions, ServerOptions>(args)
+                   .MapResult(
+                        (CopyOptions _) => ExecuteCopyAsync(),
+                        (PasteOptions opts) => ExecutePasteAsync(opts),
+                        (ServerOptions opts) => ExecuteServerAsync(opts),
+                        errs => Task.FromResult(0));
 
-                await _dispatcher.Resume();
+            await _dispatcher.InvokeAsync(() =>
+            {
                 try
                 {
                     Clipboard.Flush();
                 }
-                catch
-                { }
-            }
-            catch (Exception e)
-            {
-                await Console.Error.WriteLineAsync(e.Message);
-            }
-            finally
-            {
-                _dispatcher.InvokeShutdown();
-            }
+                catch {}
+            });
         }
 
         [STAThread]
         static void Main(string[] args)
         {
             var app = new App();
-            _ = app.RunAsync(args);
-
-            try
+            _ = Task.Run(async () =>
             {
-                // Message pump
-                Dispatcher.Run();
-            }
-            catch { }
+                try
+                {
+                    await app.RunAsync(args);
+                }
+                catch (Exception e)
+                {
+                    await Console.Error.WriteLineAsync(e.Message);
+                }
+                finally
+                {
+                    Environment.Exit(0);
+                }
+
+            });
+
+            // Message pump
+            Dispatcher.Run();
+
         }
 
     }
